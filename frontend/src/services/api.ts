@@ -81,6 +81,10 @@ export const traccarApi = {
   positions: () => api.get('/traccar/positions'),
   history: (deviceId: string, from: string, to: string) => api.get(`/traccar/history/${deviceId}`, { params: { from, to } }),
   configure: (d: any) => api.post('/traccar/configure', d),
+  autoConfigure: () => api.post('/traccar/auto-configure', {}),
+  mapUrl: () => api.get('/traccar/map-url'),
+  createDevice: (d: any) => api.post('/traccar/devices', d),
+  deleteDevice: (id: number) => api.delete(`/traccar/devices/${id}`),
 }
 
 export const superadminApi = {

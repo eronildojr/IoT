@@ -429,6 +429,52 @@ router.get('/traccar/history/:deviceId', auth, async (req: Request, res: Respons
   catch (e: any) { return res.status(502).json({ error: 'Erro ao buscar histórico', detail: e.message }); }
 });
 
+// Criar dispositivo no Traccar
+router.post('/traccar/devices', auth, async (req: Request, res: Response) => {
+  const cfg = await getTraccar(req.tenantId!);
+  if (!cfg) return res.status(400).json({ error: 'Traccar não configurado' });
+  const { name, uniqueId, phone, model, category } = req.body;
+  if (!name || !uniqueId) return res.status(400).json({ error: 'name e uniqueId obrigatórios' });
+  try {
+    const r = await axios.post(`${cfg.base}/api/devices`, { name, uniqueId, phone: phone || '', model: model || '', category: category || 'default' }, { auth: cfg.auth, timeout: 10000 });
+    return res.status(201).json(r.data);
+  } catch (e: any) { return res.status(502).json({ error: 'Erro ao criar dispositivo', detail: e.response?.data || e.message }); }
+});
+
+// Deletar dispositivo no Traccar
+router.delete('/traccar/devices/:id', auth, async (req: Request, res: Response) => {
+  const cfg = await getTraccar(req.tenantId!);
+  if (!cfg) return res.status(400).json({ error: 'Traccar não configurado' });
+  try {
+    await axios.delete(`${cfg.base}/api/devices/${req.params.id}`, { auth: cfg.auth, timeout: 10000 });
+    return res.json({ success: true });
+  } catch (e: any) { return res.status(502).json({ error: 'Erro ao deletar dispositivo', detail: e.message }); }
+});
+
+// Auto-configurar Traccar local (para o servidor que tem o Traccar no mesmo host)
+router.post('/traccar/auto-configure', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  // Tenta conectar ao Traccar local na porta 8082
+  const localUrl = 'http://iot_traccar:8082';
+  const { adminUser = 'admin@iotplatform.com', adminPass = 'Admin@IoT2024!' } = req.body;
+  try {
+    await axios.get(`${localUrl}/api/server`, { auth: { username: adminUser, password: adminPass }, timeout: 5000 });
+    await query('UPDATE tenants SET traccar_server_url=$1,traccar_admin_user=$2,traccar_admin_pass=$3 WHERE id=$4',
+      [localUrl, adminUser, adminPass, req.tenantId]);
+    return res.json({ success: true, message: 'Traccar configurado automaticamente' });
+  } catch (e: any) {
+    return res.status(400).json({ error: 'Não foi possível conectar ao Traccar local', detail: e.message });
+  }
+});
+
+// Proxy para o mapa do Traccar (retorna a URL pública)
+router.get('/traccar/map-url', auth, async (req: Request, res: Response) => {
+  const cfg = await getTraccar(req.tenantId!);
+  if (!cfg) return res.json({ url: null, configured: false });
+  // Retorna a URL pública do Traccar (substituindo host interno pelo IP do servidor)
+  const publicUrl = cfg.base.replace('iot_traccar', req.hostname).replace('http://', 'http://');
+  return res.json({ url: publicUrl, configured: true, base: cfg.base });
+});
+
 // ════════════════════════════════════════════════════════════
 // API KEYS
 // ════════════════════════════════════════════════════════════
