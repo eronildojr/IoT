@@ -110,11 +110,71 @@ router.post('/devices', auth, requireRole('admin', 'operator'), async (req: Requ
 });
 
 router.put('/devices/:id', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
-  const { name, status, location, config, tags, notes, batteryLevel, signalStrength } = req.body;
-  const d = await queryOne(`UPDATE devices SET name=COALESCE($1,name),status=COALESCE($2,status),location=COALESCE($3,location),config=COALESCE($4,config),tags=COALESCE($5,tags),notes=COALESCE($6,notes),battery_level=COALESCE($7,battery_level),signal_strength=COALESCE($8,signal_strength) WHERE id=$9 AND tenant_id=$10 RETURNING *`,
-    [name, status, location ? JSON.stringify(location) : null, config ? JSON.stringify(config) : null, tags, notes, batteryLevel, signalStrength, req.params.id, req.tenantId]);
+  const { name, status, location, config, tags, notes, batteryLevel, signalStrength,
+    connectionHost, connectionPort, connectionProtocol, connectionPath, connectionConfig } = req.body;
+  const d = await queryOne(
+    `UPDATE devices SET
+      name=COALESCE($1,name),
+      status=COALESCE($2,status),
+      location=COALESCE($3,location),
+      config=COALESCE($4,config),
+      tags=COALESCE($5,tags),
+      notes=COALESCE($6,notes),
+      battery_level=COALESCE($7,battery_level),
+      signal_strength=COALESCE($8,signal_strength),
+      connection_host=COALESCE($9,connection_host),
+      connection_port=COALESCE($10,connection_port),
+      connection_protocol=COALESCE($11,connection_protocol),
+      connection_path=COALESCE($12,connection_path),
+      connection_config=COALESCE($13,connection_config)
+     WHERE id=$14 AND tenant_id=$15 RETURNING *`,
+    [name, status, location ? JSON.stringify(location) : null, config ? JSON.stringify(config) : null,
+     tags, notes, batteryLevel, signalStrength,
+     connectionHost || null, connectionPort || null, connectionProtocol || null,
+     connectionPath || null, connectionConfig ? JSON.stringify(connectionConfig) : null,
+     req.params.id, req.tenantId]);
   if (!d) return res.status(404).json({ error: 'Não encontrado' });
   return res.json(d);
+});
+
+// Salvar configuração de conexão IP:Porta de um dispositivo
+router.put('/devices/:id/connection', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
+  const { host, port, protocol, path = '/', config = {} } = req.body;
+  if (!host || !port) return res.status(400).json({ error: 'host e port são obrigatórios' });
+  const d = await queryOne(
+    `UPDATE devices SET
+      connection_host=$1, connection_port=$2, connection_protocol=$3,
+      connection_path=$4, connection_config=$5, connection_status='configured'
+     WHERE id=$6 AND tenant_id=$7 RETURNING *`,
+    [host, parseInt(port), protocol || 'tcp', path, JSON.stringify(config), req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Não encontrado' });
+  return res.json(d);
+});
+
+// Testar conectividade com o dispositivo via HTTP/MQTT ping
+router.post('/devices/:id/connection/test', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
+  const d = await queryOne<any>('SELECT * FROM devices WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Não encontrado' });
+  if (!d.connection_host) return res.status(400).json({ error: 'Dispositivo sem host configurado' });
+  const net = await import('net');
+  const host = d.connection_host;
+  const port = d.connection_port || 80;
+  const start = Date.now();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const socket = new net.Socket();
+      socket.setTimeout(5000);
+      socket.connect(port, host, () => { socket.destroy(); resolve(); });
+      socket.on('error', reject);
+      socket.on('timeout', () => { socket.destroy(); reject(new Error('Timeout')); });
+    });
+    const latency = Date.now() - start;
+    await query(`UPDATE devices SET connection_status='online', connection_last_check=NOW() WHERE id=$1`, [d.id]);
+    return res.json({ success: true, latency, message: `Conectado em ${latency}ms` });
+  } catch (err: any) {
+    await query(`UPDATE devices SET connection_status='offline', connection_last_check=NOW() WHERE id=$1`, [d.id]);
+    return res.json({ success: false, latency: Date.now() - start, message: err.message || 'Falha na conexão' });
+  }
 });
 
 router.delete('/devices/:id', auth, requireRole('admin'), async (req: Request, res: Response) => {
@@ -163,6 +223,16 @@ router.get('/device-models', auth, async (req: Request, res: Response) => {
 
 router.get('/device-models/categories', auth, async (_req, res) => {
   return res.json(await query('SELECT DISTINCT category, COUNT(*) as count FROM device_models GROUP BY category ORDER BY category'));
+});
+
+router.get('/device-models/brands', auth, async (_req, res) => {
+  return res.json(await query('SELECT DISTINCT brand, COUNT(*) as count FROM device_models WHERE brand IS NOT NULL GROUP BY brand ORDER BY brand'));
+});
+
+router.get('/device-models/:id', auth, async (req, res) => {
+  const m = await queryOne('SELECT * FROM device_models WHERE id=$1', [req.params.id]);
+  if (!m) return res.status(404).json({ error: 'Não encontrado' });
+  return res.json(m);
 });
 
 // ════════════════════════════════════════════════════════════

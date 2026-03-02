@@ -37,11 +37,15 @@ export const devicesApi = {
   delete: (id: string) => api.delete(`/devices/${id}`),
   telemetry: (id: string, p?: any) => api.get(`/devices/${id}/telemetry`, { params: p }),
   ingest: (id: string, data: any) => api.post(`/devices/${id}/telemetry`, { data }),
+  setConnection: (id: string, d: any) => api.put(`/devices/${id}/connection`, d),
+  testConnection: (id: string) => api.post(`/devices/${id}/connection/test`, {}),
 }
 
 export const modelsApi = {
   list: (p?: any) => api.get('/device-models', { params: p }),
   categories: () => api.get('/device-models/categories'),
+  brands: () => api.get('/device-models/brands'),
+  get: (id: number) => api.get(`/device-models/${id}`),
 }
 
 export const alertsApi = {
