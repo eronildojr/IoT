@@ -17,7 +17,8 @@ async function runMigrations() {
   const client = await pool.connect();
   try {
     await client.query(`CREATE TABLE IF NOT EXISTS _migrations (name VARCHAR(256) PRIMARY KEY, ran_at TIMESTAMPTZ DEFAULT NOW())`);
-    const migrationsDir = path.join(__dirname, 'migrations');
+    // No build, __dirname é /app/dist; SQLs ficam em /app/src/migrations
+    const migrationsDir = path.join(__dirname, '..', 'src', 'migrations');
     if (!fs.existsSync(migrationsDir)) return;
     const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
     for (const file of files) {
