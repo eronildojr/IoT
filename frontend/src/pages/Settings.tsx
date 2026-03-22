@@ -130,7 +130,7 @@ export default function Settings() {
                       <p className="font-medium text-gray-200 text-sm">{k.name}</p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <code className="text-xs font-mono text-gray-500">
-                          {showKeys[k.id] ? k.key_preview : `${k.key_preview?.substring(0, 12)}...`}
+                          {showKeys[k.id] ? k.key_prefix : `${k.key_prefix?.substring(0, 12)}...`}
                         </code>
                         <button onClick={() => setShowKeys(p => ({ ...p, [k.id]: !p[k.id] }))} className="text-gray-600 hover:text-gray-400">
                           {showKeys[k.id] ? <EyeOff size={12} /> : <Eye size={12} />}

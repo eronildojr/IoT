@@ -98,3 +98,33 @@ export const apiKeysApi = {
   create: (d: any) => api.post('/api-keys', d),
   delete: (id: string) => api.delete(`/api-keys/${id}`),
 }
+
+export const driversApi = {
+  list: () => api.get('/routing/drivers'),
+  create: (d: any) => api.post('/routing/drivers', d),
+  update: (id: string, d: any) => api.put(`/routing/drivers/${id}`, d),
+  delete: (id: string) => api.delete(`/routing/drivers/${id}`),
+}
+
+export const routesApi = {
+  list: (p?: any) => api.get('/routing/routes', { params: p }),
+  get: (id: string) => api.get(`/routing/routes/${id}`),
+  create: (d: any) => api.post('/routing/routes', d),
+  update: (id: string, d: any) => api.put(`/routing/routes/${id}`, d),
+  delete: (id: string) => api.delete(`/routing/routes/${id}`),
+  addStop: (id: string, d: any) => api.post(`/routing/routes/${id}/stops`, d),
+  importStops: (id: string, stops: any[]) => api.post(`/routing/routes/${id}/stops/import`, { stops }),
+  deleteStop: (id: string, stopId: string) => api.delete(`/routing/routes/${id}/stops/${stopId}`),
+  optimize: (id: string) => api.post(`/routing/routes/${id}/optimize`),
+  geometry: (id: string) => api.get(`/routing/routes/${id}/geometry`),
+  assign: (id: string, driverId: string) => api.post(`/routing/routes/${id}/assign`, { driverId }),
+  positions: (id: string) => api.get(`/routing/routes/${id}/positions`),
+  geocode: (address: string) => api.post('/routing/geocode', { address }),
+}
+
+export const driverRouteApi = {
+  get: (token: string) => api.get(`/routing/driver-route/${token}`),
+  start: (token: string) => api.post(`/routing/driver-route/${token}/start`),
+  updateStop: (token: string, stopId: string, d: any) => api.put(`/routing/driver-route/${token}/stops/${stopId}`, d),
+  sendPosition: (token: string, d: any) => api.post(`/routing/driver-route/${token}/position`, d),
+}

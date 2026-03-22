@@ -5,7 +5,7 @@ import { alertsApi } from '../services/api'
 import { useState } from 'react'
 import {
   LayoutDashboard, Cpu, BookOpen, MapPin, Bell, Zap,
-  BarChart3, Users, Settings, LogOut, Radio, Shield, Menu
+  BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route
 } from 'lucide-react'
 
 const nav = [
@@ -15,6 +15,7 @@ const nav = [
   { to: '/trackers', icon: MapPin, label: 'Rastreadores GPS' },
   { to: '/alerts', icon: Bell, label: 'Alertas' },
   { to: '/automations', icon: Zap, label: 'Automações' },
+  { to: '/routing', icon: Route, label: 'Roteirização' },
   { to: '/analytics', icon: BarChart3, label: 'Análise & IA' },
   { to: '/users', icon: Users, label: 'Usuários' },
   { to: '/settings', icon: Settings, label: 'Configurações' },

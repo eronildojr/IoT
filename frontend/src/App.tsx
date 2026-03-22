@@ -15,6 +15,9 @@ import Analytics from './pages/Analytics'
 import Users from './pages/Users'
 import Settings from './pages/Settings'
 import SuperAdmin from './pages/SuperAdmin'
+import Routing from './pages/Routing'
+import RouteDetail from './pages/RouteDetail'
+import DriverView from './pages/DriverView'
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30000 } } })
 
@@ -37,6 +40,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/driver/:token" element={<DriverView />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route element={<Guard><Layout /></Guard>}>
             <Route path="/dashboard" element={<Dashboard />} />
@@ -49,6 +53,8 @@ export default function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/users" element={<Users />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/routing" element={<Routing />} />
+            <Route path="/routing/:id" element={<RouteDetail />} />
             <Route path="/superadmin" element={<SuperGuard><SuperAdmin /></SuperGuard>} />
           </Route>
         </Routes>

@@ -237,11 +237,11 @@ export default function DeviceLibrary() {
                     {m.default_port && m.default_port > 0 && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-400 font-mono">:{m.default_port}</span>
                     )}
-                    {(m.data_types || []).slice(0, 2).map((dt: string) => (
+                    {(Object.keys(m.data_schema || {}) || []).slice(0, 2).map((dt: string) => (
                       <span key={dt} className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-500">{dt.replace(/_/g, ' ')}</span>
                     ))}
-                    {(m.data_types || []).length > 2 && (
-                      <span className="text-xs text-gray-600">+{m.data_types.length - 2}</span>
+                    {(Object.keys(m.data_schema || {}) || []).length > 2 && (
+                      <span className="text-xs text-gray-600">+{Object.keys(m.data_schema || {}).length - 2}</span>
                     )}
                   </div>
                 </div>
@@ -312,7 +312,7 @@ export default function DeviceLibrary() {
                 <div>
                   <p className="text-gray-500 text-xs uppercase mb-2">Dados enviados</p>
                   <div className="flex flex-wrap gap-1.5">
-                    {(selected.data_types || []).map((dt: string) => (
+                    {(Object.keys(selected.data_schema || {}) || []).map((dt: string) => (
                       <span key={dt} className="text-xs px-2 py-1 bg-cyan-500/10 text-cyan-400 rounded-full border border-cyan-500/20">
                         {dt.replace(/_/g, ' ')}
                       </span>

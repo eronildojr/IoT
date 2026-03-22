@@ -8,6 +8,7 @@ import { Pool } from 'pg';
 import fs from 'fs';
 import path from 'path';
 import routes from './routes';
+import routingRoutes from './routes/routing';
 
 dotenv.config();
 
@@ -50,10 +51,12 @@ app.use(express.json({ limit: '10mb' }));
 
 // Rate limiting
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Muitas tentativas. Tente em 15 minutos.' } }));
+app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
 app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 300 }));
 
 // Rotas
 app.use('/api', routes);
+app.use('/api/routing', routingRoutes);
 
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
@@ -63,15 +66,35 @@ app.use((_req, res) => res.status(404).json({ error: 'Rota não encontrada' }));
 
 // Error handler
 app.use((err: any, _req: any, res: any, _next: any) => {
-  console.error('[ERROR]', err);
-  res.status(500).json({ error: 'Erro interno do servidor' });
+  console.error('[ERROR]', err.stack || err);
+  const isDev = process.env.NODE_ENV !== 'production';
+  res.status(err.status || 500).json({
+    error: 'Erro interno do servidor',
+    ...(isDev && { detail: err.message, stack: err.stack }),
+  });
 });
 
 // Rodar migrações e iniciar servidor
 runMigrations().then(() => {
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[IoT Platform] Backend rodando na porta ${PORT}`);
   });
+
+  // Graceful shutdown
+  const shutdown = (signal: string) => {
+    console.log(`[Shutdown] Recebido ${signal}, encerrando...`);
+    server.close(() => {
+      console.log('[Shutdown] Servidor HTTP encerrado');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.error('[Shutdown] Timeout, forcando encerramento');
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }).catch(e => {
   console.error('[Startup] Falha nas migrações:', e);
   process.exit(1);

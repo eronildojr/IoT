@@ -23,8 +23,8 @@ export default function Dashboard() {
 
   const chartData = Array.from({ length: 12 }, (_, i) => ({
     t: `${String(i * 2).padStart(2, '0')}h`,
-    online: Math.floor(Math.random() * 20) + 5,
-    alerts: Math.floor(Math.random() * 4),
+    online: stats ? Math.max(0, (+stats.online || 0) + Math.round(Math.sin(i * 0.5) * 2)) : 0,
+    alerts: stats ? Math.max(0, (+stats.warning || 0) - Math.floor(i / 4)) : 0,
   }))
 
   const cards = [

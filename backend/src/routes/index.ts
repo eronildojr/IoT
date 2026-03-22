@@ -6,7 +6,14 @@ import { auth, requireRole } from '../middleware/auth';
 import axios from 'axios';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
+
+const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error('[SECURITY] JWT_SECRET nao definido! Defina a variavel de ambiente JWT_SECRET.');
+  process.exit(1);
+}
 
 // ════════════════════════════════════════════════════════════
 // AUTH
@@ -15,6 +22,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 router.post('/auth/login', async (req: Request, res: Response) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email e senha obrigatórios' });
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Email inválido' });
   try {
     const user = await queryOne<any>(
       `SELECT u.*, t.name as tenant_name, t.slug, t.plan, t.is_active as tenant_active
@@ -34,6 +42,7 @@ router.post('/auth/login', async (req: Request, res: Response) => {
 router.post('/auth/register', async (req: Request, res: Response) => {
   const { tenantName, name, email, password } = req.body;
   if (!tenantName || !name || !email || !password) return res.status(400).json({ error: 'Todos os campos são obrigatórios' });
+  if (!isValidEmail(email)) return res.status(400).json({ error: 'Email inválido' });
   if (password.length < 8) return res.status(400).json({ error: 'Senha mínimo 8 caracteres' });
   try {
     const exists = await queryOne('SELECT id FROM users WHERE email = $1', [email]);
@@ -362,13 +371,24 @@ router.get('/superadmin/tenants', auth, requireRole('superadmin'), async (_req, 
 });
 
 router.post('/superadmin/tenants', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
-  const { name, email, plan = 'basic', maxDevices = 10, maxUsers = 5 } = req.body;
+  const { name, email, adminName, adminEmail, adminPassword, plan = 'basic', maxDevices = 10, maxUsers = 5 } = req.body;
   if (!name || !email) return res.status(400).json({ error: 'name e email obrigatórios' });
   let slug = name.toLowerCase().replace(/[^a-z0-9]/g, '-').replace(/-+/g, '-').slice(0, 50);
   let i = 1;
   while (await queryOne('SELECT id FROM tenants WHERE slug=$1', [slug])) slug = `${slug}-${i++}`;
-  const t = await queryOne(`INSERT INTO tenants(name,slug,email,plan,max_devices,max_users) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, [name, slug, email, plan, maxDevices, maxUsers]);
-  return res.status(201).json(t);
+  try {
+    const t = await queryOne<any>(`INSERT INTO tenants(name,slug,email,plan,max_devices,max_users) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, [name, slug, email, plan, maxDevices, maxUsers]);
+    // Criar usuario admin para o tenant se credenciais fornecidas
+    if (adminEmail && adminPassword) {
+      const hash = await bcrypt.hash(adminPassword, 12);
+      await queryOne(`INSERT INTO users(tenant_id,name,email,password_hash,role) VALUES($1,$2,$3,$4,'admin')`,
+        [t!.id, adminName || name, adminEmail, hash]);
+    }
+    return res.status(201).json(t);
+  } catch (e: any) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Email ou slug já cadastrado' });
+    throw e;
+  }
 });
 
 router.put('/superadmin/tenants/:id', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
