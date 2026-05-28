@@ -405,6 +405,23 @@ router.put('/superadmin/tenants/:id', auth, requireRole('superadmin'), async (re
   return res.json(t);
 });
 
+// ── SuperAdmin: Detalhes do tenant ──
+router.get('/superadmin/tenants/:id/detail', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  const t = await queryOne<any>(`SELECT t.*,COUNT(DISTINCT u.id) as user_count,COUNT(DISTINCT d.id) as device_count,COUNT(DISTINCT c.id) as camera_count FROM tenants t LEFT JOIN users u ON u.tenant_id=t.id LEFT JOIN devices d ON d.tenant_id=t.id LEFT JOIN jimi_cameras c ON c.tenant_id=t.id WHERE t.id=$1 GROUP BY t.id`, [req.params.id]);
+  if (!t) return res.status(404).json({ error: 'Tenant não encontrado' });
+  return res.json(t);
+});
+
+// ── SuperAdmin: Excluir tenant ──
+router.delete('/superadmin/tenants/:id', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  const t = await queryOne<any>('SELECT slug FROM tenants WHERE id=$1', [req.params.id]);
+  if (!t) return res.status(404).json({ error: 'Tenant não encontrado' });
+  if (t.slug === 'superadmin') return res.status(403).json({ error: 'Não é possível excluir o tenant superadmin' });
+  await query('DELETE FROM tenants WHERE id=$1', [req.params.id]);
+  return res.json({ success: true });
+});
+
+
 // ════════════════════════════════════════════════════════════
 // TRACCAR
 // ════════════════════════════════════════════════════════════

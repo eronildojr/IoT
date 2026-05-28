@@ -118,6 +118,8 @@ export const superadminApi = {
   tenants: () => api.get('/superadmin/tenants'),
   createTenant: (d: any) => api.post('/superadmin/tenants', d),
   updateTenant: (id: string, d: any) => api.put(`/superadmin/tenants/${id}`, d),
+  deleteTenant: (id: string) => api.delete(`/superadmin/tenants/${id}`),
+  getTenantDetail: (id: string) => api.get(`/superadmin/tenants/${id}/detail`),
 }
 
 export const apiKeysApi = {
