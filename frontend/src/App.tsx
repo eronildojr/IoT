@@ -18,6 +18,11 @@ import SuperAdmin from './pages/SuperAdmin'
 import Routing from './pages/Routing'
 import RouteDetail from './pages/RouteDetail'
 import DriverView from './pages/DriverView'
+import Cameras from './pages/Cameras'
+import WalkieFleet from './pages/WalkieFleet'
+import Tuya from './pages/Tuya'
+import Mapa from './pages/Mapa'
+import Diagnostico from './pages/Diagnostico'
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30000 } } })
 
@@ -33,6 +38,13 @@ function SuperGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function AdminGuard({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth()
+  if (!user) return <Navigate to="/login" replace />
+  if (user.role !== 'admin' && user.role !== 'superadmin') return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={qc}>
@@ -44,6 +56,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route element={<Guard><Layout /></Guard>}>
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/mapa" element={<Mapa />} />
             <Route path="/devices" element={<Devices />} />
             <Route path="/devices/:id" element={<DeviceDetail />} />
             <Route path="/library" element={<DeviceLibrary />} />
@@ -53,8 +66,12 @@ export default function App() {
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/users" element={<Users />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/cameras" element={<Cameras />} />
+            <Route path="/walkiefleet" element={<WalkieFleet />} />
+            <Route path="/tuya" element={<Tuya />} />
             <Route path="/routing" element={<Routing />} />
             <Route path="/routing/:id" element={<RouteDetail />} />
+            <Route path="/diagnostico" element={<AdminGuard><Diagnostico /></AdminGuard>} />
             <Route path="/superadmin" element={<SuperGuard><SuperAdmin /></SuperGuard>} />
           </Route>
         </Routes>

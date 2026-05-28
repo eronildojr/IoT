@@ -5,20 +5,29 @@ import { alertsApi } from '../services/api'
 import { useState } from 'react'
 import {
   LayoutDashboard, Cpu, BookOpen, MapPin, Bell, Zap,
-  BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route
+  BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route,
+  Camera, Wifi, Plug, Map, Activity
 } from 'lucide-react'
 
 const nav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/mapa', icon: Map, label: 'Mapa' },
   { to: '/devices', icon: Cpu, label: 'Dispositivos IoT' },
   { to: '/library', icon: BookOpen, label: 'Biblioteca' },
   { to: '/trackers', icon: MapPin, label: 'Rastreadores GPS' },
+  { to: '/cameras', icon: Camera, label: 'Cameras' },
+  { to: '/walkiefleet', icon: Wifi, label: 'WalkieFleet' },
+  { to: '/tuya', icon: Plug, label: 'Tuya IoT' },
   { to: '/alerts', icon: Bell, label: 'Alertas' },
   { to: '/automations', icon: Zap, label: 'Automações' },
   { to: '/routing', icon: Route, label: 'Roteirização' },
   { to: '/analytics', icon: BarChart3, label: 'Análise & IA' },
   { to: '/users', icon: Users, label: 'Usuários' },
   { to: '/settings', icon: Settings, label: 'Configurações' },
+]
+
+const adminNav = [
+  { to: '/diagnostico', icon: Activity, label: 'Diagnóstico' },
 ]
 
 const roles: Record<string, string> = { superadmin: 'Super Admin', admin: 'Administrador', operator: 'Operador', viewer: 'Visualizador' }
@@ -62,6 +71,13 @@ export default function Layout() {
                   {unread.count > 9 ? '9+' : unread.count}
                 </span>
               )}
+            </NavLink>
+          ))}
+          {(user?.role === 'admin' || user?.role === 'superadmin') && adminNav.map(({ to, icon: Icon, label }) => (
+            <NavLink key={to} to={to} onClick={() => setOpen(false)}
+              className={({ isActive }) => `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${isActive ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}>
+              <Icon size={18} className="flex-shrink-0" />
+              <span>{label}</span>
             </NavLink>
           ))}
           {user?.role === 'superadmin' && (

@@ -10,10 +10,22 @@ services:
       POSTGRES_DB: iotplatform
       POSTGRES_USER: iotuser
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-iot_secure_pass_2024}
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - iot_network
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U iotuser -d iotplatform"]
       interval: 10s
@@ -35,13 +47,35 @@ services:
       SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@iotplatform.com}
       SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-Admin@2024!}
       SUPERADMIN_NAME: ${SUPERADMIN_NAME:-Super Admin}
+      JIMI_APP_KEY: ${JIMI_APP_KEY:-}
+      JIMI_APP_SECRET: ${JIMI_APP_SECRET:-}
+      JIMI_BASE_URL: ${JIMI_BASE_URL:-https://eu-open.tracksolidpro.com/route/rest}
+      JIMI_ACCESS_TOKEN: ${JIMI_ACCESS_TOKEN:-}
+      WF_BOT_ENABLED: ${WF_BOT_ENABLED:-false}
+      WF_BOT_LOGIN: ${WF_BOT_LOGIN:-BOT_DISPATCH}
+      WF_BOT_PASSWORD: ${WF_BOT_PASSWORD:-}
+      WF_BOT_DEVICE_ID_FILE: ${WF_BOT_DEVICE_ID_FILE:-/var/groupates/wf_bot_device_id.txt}
+      WF_RELAY_WS_URL: ws://groupates_walkiefleet:8070/ws
+    env_file:
+      - /etc/groupates/shinobi.env
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - iot_network
+      - groupatesiot-network
     volumes:
       - ./backend/uploads:/app/uploads
+      - /etc/groupates:/etc/groupates
+      - /etc/wireguard:/etc/wireguard
+      - /run/wireguard:/run/wireguard
+      - /var/groupates/event-snapshots:/app/data/event-snapshots
+    cap_add:
+      - NET_ADMIN
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', r => { process.exit(r.statusCode === 200 ? 0 : 1) }).on('error', () => process.exit(1))"]
       interval: 30s
@@ -58,6 +92,15 @@ services:
     restart: unless-stopped
     networks:
       - iot_network
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
 
   # ─── Nginx Reverse Proxy ──────────────────────────────────────
   nginx:
@@ -70,6 +113,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
       - certbot_www:/var/www/certbot:ro
       - certbot_certs:/etc/letsencrypt:ro
     depends_on:
@@ -77,6 +121,7 @@ services:
       - frontend
     networks:
       - iot_network
+      - groupatesiot-network
 
   # ─── Certbot SSL ──────────────────────────────────────────────
   certbot:
@@ -113,5 +158,15 @@ volumes:
   traccar_data:
 
 networks:
+  default:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.26.0.0/16
   iot_network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+  groupatesiot-network:
+    external: true

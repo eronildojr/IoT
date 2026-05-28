@@ -64,11 +64,13 @@ export default function Analytics() {
     return { field, min: min.toFixed(2), max: max.toFixed(2), mean: mean.toFixed(2), last: last.toFixed(2), trend }
   }).filter(Boolean)
 
-  // Dados de disponibilidade (mock baseado em stats reais)
+  // Dados de disponibilidade baseados nos stats reais do período
+  const onlineCount = parseInt(stats?.online || '0') || 0
+  const offlineCount = parseInt(stats?.offline || '0') || 0
   const availData = Array.from({ length: 7 }, (_, i) => ({
     day: format(subDays(new Date(), 6 - i), 'dd/MM', { locale: ptBR }),
-    online: Math.floor(Math.random() * 5) + (parseInt(stats?.online) || 0),
-    offline: parseInt(stats?.offline) || 0,
+    online: onlineCount,
+    offline: offlineCount,
   }))
 
   const fieldColors = ['#06b6d4', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444']

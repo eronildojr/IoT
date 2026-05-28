@@ -35,6 +35,8 @@ export const devicesApi = {
   create: (d: any) => api.post('/devices', d),
   update: (id: string, d: any) => api.put(`/devices/${id}`, d),
   delete: (id: string) => api.delete(`/devices/${id}`),
+  diagnose: (id: string, target_ip: string, target_port?: number) =>
+    api.post(`/vpn/tunnels/${id}/diagnose`, { target_ip, target_port }),
   telemetry: (id: string, p?: any) => api.get(`/devices/${id}/telemetry`, { params: p }),
   ingest: (id: string, data: any) => api.post(`/devices/${id}/telemetry`, { data }),
   setConnection: (id: string, d: any) => api.put(`/devices/${id}/connection`, d),
@@ -78,13 +80,38 @@ export const usersApi = {
 export const traccarApi = {
   status: () => api.get('/traccar/status'),
   devices: () => api.get('/traccar/devices'),
-  positions: () => api.get('/traccar/positions'),
-  history: (deviceId: string, from: string, to: string) => api.get(`/traccar/history/${deviceId}`, { params: { from, to } }),
+  positions: (deviceId?: number) => api.get('/traccar/positions', { params: deviceId ? { deviceId } : {} }),
+  history: (deviceId: number, from: string, to: string) => api.get('/traccar/positions/history', { params: { deviceId, from, to } }),
   configure: (d: any) => api.post('/traccar/configure', d),
   autoConfigure: () => api.post('/traccar/auto-configure', {}),
   mapUrl: () => api.get('/traccar/map-url'),
   createDevice: (d: any) => api.post('/traccar/devices', d),
+  updateDevice: (id: number, d: any) => api.put(`/traccar/devices/${id}`, d),
   deleteDevice: (id: number) => api.delete(`/traccar/devices/${id}`),
+  // Grupos
+  groups: () => api.get('/traccar/groups'),
+  createGroup: (d: any) => api.post('/traccar/groups', d),
+  updateGroup: (id: number, d: any) => api.put(`/traccar/groups/${id}`, d),
+  deleteGroup: (id: number) => api.delete(`/traccar/groups/${id}`),
+  // Geofences
+  geofences: () => api.get('/traccar/geofences'),
+  createGeofence: (d: any) => api.post('/traccar/geofences', d),
+  updateGeofence: (id: number, d: any) => api.put(`/traccar/geofences/${id}`, d),
+  deleteGeofence: (id: number) => api.delete(`/traccar/geofences/${id}`),
+  linkGeofence: (fenceId: number, deviceId: number) => api.post(`/traccar/geofences/${fenceId}/link/${deviceId}`),
+  unlinkGeofence: (fenceId: number, deviceId: number) => api.delete(`/traccar/geofences/${fenceId}/link/${deviceId}`),
+  // Eventos e notificações
+  events: (deviceId: number, from: string, to: string, type?: string) => api.get('/traccar/events', { params: { deviceId, from, to, type } }),
+  notifications: () => api.get('/traccar/notifications'),
+  createNotification: (d: any) => api.post('/traccar/notifications', d),
+  deleteNotification: (id: number) => api.delete(`/traccar/notifications/${id}`),
+  // Relatórios
+  report: (type: string, deviceId: number, from: string, to: string) => api.get(`/traccar/reports/${type}`, { params: { deviceId, from, to }, timeout: 30000 }),
+  // Comandos
+  commandTypes: (deviceId: number) => api.get(`/traccar/commands/types/${deviceId}`),
+  sendCommand: (d: any) => api.post('/traccar/commands/send', d),
+  // Server
+  server: () => api.get('/traccar/server'),
 }
 
 export const superadminApi = {
@@ -122,9 +149,161 @@ export const routesApi = {
   geocode: (address: string) => api.post('/routing/geocode', { address }),
 }
 
+export const vpnApi = {
+  list: () => api.get('/vpn/tunnels'),
+  get: (id: number) => api.get(`/vpn/tunnels/${id}`),
+  create: (d: any) => api.post('/vpn/tunnels', d),
+  update: (id: number, d: any) => api.put(`/vpn/tunnels/${id}`, d),
+  delete: (id: number) => api.delete(`/vpn/tunnels/${id}`),
+  status: (id: number) => api.get(`/vpn/tunnels/${id}/status`),
+  diagnose: (id: number, target_ip: string, target_port?: number) =>
+    api.post(`/vpn/tunnels/${id}/diagnose`, { target_ip, target_port }),
+}
+
+export const camerasApi = {
+  list: (p?: any) => api.get('/cameras', { params: p }),
+  stats: () => api.get('/cameras/stats'),
+  get: (id: string) => api.get(`/cameras/${id}`),
+  create: (d: any) => api.post('/cameras', d),
+  update: (id: string, d: any) => api.put(`/cameras/${id}`, d),
+  delete: (id: string) => api.delete(`/cameras/${id}`),
+  validateImei: (imei: string) => api.post('/cameras/validate-imei', { imei }),
+}
+
+export const jimiApi = {
+  // Config
+  config: () => api.get('/jimi/config'),
+  saveConfig: (d: any) => api.put('/jimi/config', d),
+  testConfig: () => api.post('/jimi/config/test'),
+  // Request APIs (enviar comandos)
+  startStream: (imei: string, channel?: number) => api.post('/jimi/request/stream/start', { imei, channel: channel || 1 }),
+  stopStream: (imei: string, channel?: number) => api.post('/jimi/request/stream/stop', { imei, channel: channel || 1 }),
+  takePhoto: (imei: string, channel?: number) => api.post('/jimi/request/photo', { imei, channel: channel || 1 }),
+  queryResources: (imei: string, d?: any) => api.post('/jimi/request/resources', { imei, ...d }),
+  playback: (imei: string, d?: any) => api.post('/jimi/request/playback', { imei, ...d }),
+  sendCommand: (imei: string, content: string) => api.post('/jimi/request/command', { imei, content }),
+  // Dados
+  gpsHistory: (imei: string, limit?: number) => api.get(`/jimi/data/gps/${imei}`, { params: { limit } }),
+  alarms: (imei: string, limit?: number) => api.get(`/jimi/data/alarms/${imei}`, { params: { limit } }),
+  media: (imei: string, limit?: number) => api.get(`/jimi/data/media/${imei}`, { params: { limit } }),
+  pushLog: (limit?: number) => api.get('/jimi/data/push-log', { params: { limit } }),
+}
+
+export const walkiefleetApi = {
+  // Grupos
+  groups: () => api.get('/walkiefleet/groups'),
+  createGroup: (d: any) => api.post('/walkiefleet/groups', d),
+  updateGroup: (id: string, d: any) => api.put(`/walkiefleet/groups/${id}`, d),
+  deleteGroup: (id: string) => api.delete(`/walkiefleet/groups/${id}`),
+  // Devices
+  devices: (p?: any) => api.get('/walkiefleet/devices', { params: p }),
+  stats: () => api.get('/walkiefleet/stats'),
+  createDevice: (d: any) => api.post('/walkiefleet/devices', d),
+  updateDevice: (id: string, d: any) => api.put(`/walkiefleet/devices/${id}`, d),
+  deleteDevice: (id: string) => api.delete(`/walkiefleet/devices/${id}`),
+  // Messages / History
+  messages: (p?: any) => api.get('/walkiefleet/messages', { params: p }),
+  // Config
+  config: () => api.get('/walkiefleet/config'),
+  saveConfig: (d: any) => api.post('/walkiefleet/config', d),
+}
+
+export const agentsApi = {
+  list: () => api.get('/agents'),
+  create: (d: any) => api.post('/agents', d),
+  update: (id: number, d: any) => api.put(`/agents/${id}`, d),
+  delete: (id: number) => api.delete(`/agents/${id}`),
+  traccarDevices: () => api.get('/dispatch/traccar-devices'),
+}
+
+export const eventsApi = {
+  list: (p: Record<string, any> = {}) => {
+    const q = new URLSearchParams()
+    Object.entries(p).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') q.set(k, String(v)) })
+    return api.get('/events?' + q.toString())
+  },
+  listForCamera: (camId: number, limit = 50) => api.get(`/ip-cameras/${camId}/events?limit=${limit}`),
+  getWebhookUrl: (camId: number) => api.get(`/ip-cameras/${camId}/webhook-url`),
+  regenerateToken: (camId: number) => api.post(`/ip-cameras/${camId}/regenerate-webhook-token`),
+}
+
+export const ipCamerasApi = {
+  list: (activeOnly = false) => api.get('/ip-cameras' + (activeOnly ? '?active_only=true' : '')),
+  get: (id: number) => api.get(`/ip-cameras/${id}`),
+  create: (d: any) => api.post('/ip-cameras', d),
+  update: (id: number, d: any) => api.put(`/ip-cameras/${id}`, d),
+  delete: (id: number) => api.delete(`/ip-cameras/${id}`),
+  streamInfo: (id: number) => api.get(`/ip-cameras/${id}/stream-info`),
+  testConnection: (id: number) => api.post(`/ip-cameras/${id}/test-connection`),
+  snapshotUrl: (id: number, bust = false) => `/api/ip-cameras/${id}/snapshot${bust ? '?t=' + Date.now() : ''}`,
+}
+
+export const diagnosticsApi = {
+  health: () => api.get('/diagnostics/health'),
+  cameras: () => api.get('/diagnostics/cameras'),
+  testCamera: (id: number) => api.post(`/diagnostics/camera/${id}`),
+}
+
 export const driverRouteApi = {
   get: (token: string) => api.get(`/routing/driver-route/${token}`),
   start: (token: string) => api.post(`/routing/driver-route/${token}/start`),
   updateStop: (token: string, stopId: string, d: any) => api.put(`/routing/driver-route/${token}/stops/${stopId}`, d),
   sendPosition: (token: string, d: any) => api.post(`/routing/driver-route/${token}/position`, d),
+}
+
+export interface MapOverview {
+  ip_cameras: Array<{
+    id: number; name: string; manufacturer: string;
+    latitude: number; longitude: number;
+    location_desc: string | null; active: boolean;
+    shinobi_monitor_id: string | null;
+    last_event_received_at: string | null;
+    events_received_count: number;
+    demo?: boolean;
+  }>;
+  jimi_cameras: Array<{
+    id: string; name: string; imei: string;
+    latitude: number; longitude: number;
+    last_position_at: string | null; status: string;
+    demo?: boolean;
+  }>;
+  agents: Array<{
+    id: number; wf_username: string; display_name: string | null;
+    traccar_device_id: number;
+    latitude: number; longitude: number;
+    fix_time: string; speed_knots: number;
+    demo?: boolean;
+  }>;
+  trackers: Array<{
+    device_id: number; name: string;
+    latitude: number; longitude: number;
+    fix_time: string; speed_knots: number; course: number;
+    status: string;
+    demo?: boolean;
+  }>;
+  events: Array<{
+    id: number; camera_id: number; event_type: string;
+    severity: string; snapshot_url: string | null;
+    payload: Record<string, any>;
+    received_at: string;
+    dispatched_to_wf_username: string | null;
+    dispatched_to_distance_m: number | null;
+    dispatch_status: string | null;
+    camera_name: string;
+    latitude: number; longitude: number;
+    location_desc: string | null;
+    demo?: boolean;
+  }>;
+  iot_devices: Array<{
+    id: string | number; name: string; device_type: string;
+    vendor?: string; location_desc?: string | null;
+    state?: Record<string, any>; online?: boolean;
+    latitude: number; longitude: number; status?: string;
+    demo?: boolean;
+  }>;
+  generated_at: string;
+}
+
+export const mapApi = {
+  overview: () => api.get<MapOverview>('/map/overview').then(r => r.data),
 }

@@ -21,7 +21,7 @@ declare global {
 }
 
 export function auth(req: Request, res: Response, next: NextFunction) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.replace('Bearer ', '') || (req.query.token as string);
   if (!token) return res.status(401).json({ error: 'Token não fornecido' });
 
   // Verificar se e uma API Key (prefixo iot_)
@@ -64,6 +64,7 @@ async function authApiKey(rawKey: string, req: Request, res: Response, next: Nex
 export function requireRole(...roles: string[]) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ error: 'Não autenticado' });
+    if (req.user.role === 'superadmin') return next();
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Sem permissão' });
     next();
   };

@@ -1,3 +1,6 @@
+// TODO Google Maps migration: esta tela usa Polyline (rota traçada) e divIcon customizado
+// para paradas. Manter em Leaflet até re-implementar com google.maps.Polyline e markers
+// AdvancedMarkerElement.
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -8,6 +11,8 @@ import {
 } from 'lucide-react'
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import L from 'leaflet'
+import { BASE_LAYERS, useBaseLayer, BaseLayerToggle } from '../components/MapBase'
+import { MapErrorBoundary } from '../components/MapErrorBoundary'
 
 const stopIcon = (seq: number, status: string) => {
   const color = status === 'completed' ? '#10b981' : status === 'failed' ? '#ef4444' : status === 'arrived' ? '#f59e0b' : '#06b6d4'
@@ -35,6 +40,8 @@ export default function RouteDetail() {
   const [copied, setCopied] = useState(false)
   const [showAdd, setShowAdd] = useState(false)
   const [addForm, setAddForm] = useState({ address: '', customerName: '', customerPhone: '', notes: '' })
+  const [activeLayer, setActiveLayer] = useBaseLayer()
+  const tileLayer = BASE_LAYERS[activeLayer]
 
   const { data: route, isLoading } = useQuery({
     queryKey: ['route', id],
@@ -116,9 +123,16 @@ export default function RouteDetail() {
 
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
         {/* Mapa */}
-        <div className="xl:col-span-3 card overflow-hidden" style={{ height: '500px' }}>
+        <div className="xl:col-span-3 card overflow-hidden relative" style={{ height: '500px' }}>
+          <MapErrorBoundary>
           <MapContainer center={mapCenter} zoom={12} style={{ height: '100%', width: '100%' }}>
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap' />
+            <TileLayer
+              key={activeLayer}
+              url={tileLayer.url}
+              subdomains={(tileLayer.subdomains ?? 'abc') as any}
+              attribution={tileLayer.attribution}
+              maxZoom={tileLayer.maxZoom}
+            />
             {polyline.length > 0 && <Polyline positions={polyline} pathOptions={{ color: '#06b6d4', weight: 4, opacity: 0.8 }} />}
             {route.start_lat && route.start_lng && (
               <Marker position={[route.start_lat, route.start_lng]} icon={startIcon}>
@@ -138,6 +152,8 @@ export default function RouteDetail() {
               </Marker>
             ))}
           </MapContainer>
+          </MapErrorBoundary>
+          <BaseLayerToggle active={activeLayer} onChange={setActiveLayer} />
         </div>
 
         {/* Lista de paradas */}
@@ -180,7 +196,7 @@ export default function RouteDetail() {
 
       {/* Modal Adicionar Parada */}
       {showAdd && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[2000] p-4">
           <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md">
             <div className="flex items-center justify-between p-6 border-b border-gray-800">
               <h3 className="font-semibold text-white">Adicionar Parada</h3>

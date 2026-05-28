@@ -9,6 +9,9 @@ import fs from 'fs';
 import path from 'path';
 import routes from './routes';
 import routingRoutes from './routes/routing';
+import jimiRoutes from './routes/jimi';
+import diagnosticsRoutes from './routes/diagnostics';
+import { registerWalkieFleetWS } from './walkiefleet-ws';
 
 dotenv.config();
 
@@ -47,16 +50,27 @@ const PORT = parseInt(process.env.PORT || '3001');
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(morgan('combined'));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb', type: ['application/json', 'text/json'] }));
+app.use(express.text({ limit: '10mb', type: ['application/xml', 'text/xml', 'text/plain'] }));
+app.use(express.urlencoded({ extended: true, limit: '10mb', type: 'application/x-www-form-urlencoded' }));
+
+// Static serving for event snapshots
+app.use('/snapshots', express.static(process.env.EVENT_SNAPSHOTS_DIR || '/app/data/event-snapshots', { maxAge: '7d', immutable: true }));
 
 // Rate limiting
 app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Muitas tentativas. Tente em 15 minutos.' } }));
 app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
-app.use('/api/', rateLimit({ windowMs: 60 * 1000, max: 300 }));
+app.use(/^\/api\/(?!jimi\/push|jimi\/upload|ip-cameras\/\d+\/events\/)/, rateLimit({ windowMs: 60 * 1000, max: 300 }));
 
 // Rotas
 app.use('/api', routes);
 app.use('/api/routing', routingRoutes);
+app.use('/api/jimi', jimiRoutes);
+app.use('/api/diagnostics', diagnosticsRoutes);
+
+// Start WalkieFleet message client
+import { wfClient } from './lib/wf-client';
+setTimeout(() => wfClient.start(), 5000); // delay to let relay start first
 
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
@@ -79,6 +93,9 @@ runMigrations().then(() => {
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[IoT Platform] Backend rodando na porta ${PORT}`);
   });
+
+  // WalkieFleet WebSocket (PTT em tempo real)
+  registerWalkieFleetWS(server);
 
   // Graceful shutdown
   const shutdown = (signal: string) => {
