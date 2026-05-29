@@ -12,6 +12,61 @@ import crypto from 'crypto';
 import * as fsPromises from 'fs/promises';
 import path from 'path';
 
+
+// ════════════════════════════════════════════════════════════
+// PROVISIONAMENTO AUTOMÁTICO DE TENANT
+// ════════════════════════════════════════════════════════════
+
+const TRACCAR_URL = process.env.TRACCAR_URL || 'http://groupates_traccar:8082';
+const TRACCAR_ADMIN = process.env.TRACCAR_ADMIN_USER || 'admin';
+const TRACCAR_PASS = process.env.TRACCAR_ADMIN_PASS || 'admin';
+
+async function provisionTenantTraccar(tenantId: string, tenantName: string, tenantEmail: string, adminEmail: string, adminPassword: string) {
+  try {
+    const auth = { username: TRACCAR_ADMIN, password: TRACCAR_PASS };
+
+    // 1. Criar grupo no Traccar para o tenant
+    const groupRes = await axios.post(`${TRACCAR_URL}/api/groups`, {
+      name: tenantName,
+      attributes: { tenantId }
+    }, { auth });
+    const groupId = groupRes.data.id;
+
+    // 2. Criar usuário no Traccar para o admin do tenant
+    const traccarPass = adminPassword || `${tenantName.replace(/\s/g, '')}@2025`;
+    const userRes = await axios.post(`${TRACCAR_URL}/api/users`, {
+      name: tenantName,
+      email: adminEmail || tenantEmail,
+      password: traccarPass,
+      administrator: false,
+      attributes: { tenantId }
+    }, { auth });
+    const traccarUserId = userRes.data.id;
+
+    // 3. Vincular usuário ao grupo
+    await axios.post(`${TRACCAR_URL}/api/permissions`, {
+      userId: traccarUserId,
+      groupId: groupId
+    }, { auth });
+
+    // 4. Salvar no banco
+    await query(
+      `UPDATE tenants SET
+        traccar_group_id=$1, traccar_user_id=$2,
+        traccar_user_email=$3, traccar_user_pass=$4,
+        traccar_server_url=$5, provisioned_at=NOW()
+       WHERE id=$6`,
+      [groupId, traccarUserId, adminEmail || tenantEmail, traccarPass, TRACCAR_URL, tenantId]
+    );
+
+    console.log(`[PROVISION] Tenant ${tenantName} provisionado no Traccar: group=${groupId}, user=${traccarUserId}`);
+    return { success: true, traccarGroupId: groupId, traccarUserId };
+  } catch (err: any) {
+    console.error(`[PROVISION ERROR] Traccar: ${err?.message || err}`);
+    return { success: false, error: err?.message };
+  }
+}
+
 const router = Router();
 
 const isValidEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -391,7 +446,12 @@ router.post('/superadmin/tenants', auth, requireRole('superadmin'), async (req: 
       await queryOne(`INSERT INTO users(tenant_id,name,email,password_hash,role) VALUES($1,$2,$3,$4,'admin')`,
         [t!.id, adminName || name, adminEmail, hash]);
     }
-    return res.status(201).json(t);
+        // Provisionamento automático (não bloquear em caso de falha)
+    let provisionResult = null;
+    if (t) {
+      provisionResult = await provisionTenantTraccar(t.id, name, email, adminEmail || email, adminPassword || '');
+    }
+    return res.status(201).json({ ...t, provision: provisionResult });
   } catch (e: any) {
     if (e.code === '23505') return res.status(409).json({ error: 'Email ou slug já cadastrado' });
     throw e;
@@ -419,6 +479,355 @@ router.delete('/superadmin/tenants/:id', auth, requireRole('superadmin'), async 
   if (t.slug === 'superadmin') return res.status(403).json({ error: 'Não é possível excluir o tenant superadmin' });
   await query('DELETE FROM tenants WHERE id=$1', [req.params.id]);
   return res.json({ success: true });
+});
+
+
+// ════════════════════════════════════════════════════════════
+// BILLING / FATURAMENTO
+// ════════════════════════════════════════════════════════════
+
+// ── Customers ──────────────────────────────────────────────
+router.get('/customers', auth, async (req: Request, res: Response) => {
+  const rows = await query<any>(
+    `SELECT c.*, COUNT(DISTINCT ct.id) as total_contracts
+     FROM customers c
+     LEFT JOIN contracts ct ON ct.customer_id = c.id AND ct.tenant_id = c.tenant_id
+     WHERE c.tenant_id = $1
+     GROUP BY c.id
+     ORDER BY c.razao_social`,
+    [req.tenantId]
+  );
+  return res.json(rows);
+});
+
+router.get('/customers/:id', auth, async (req: Request, res: Response) => {
+  const c = await queryOne<any>(
+    `SELECT c.*, COUNT(DISTINCT ct.id) as total_contracts,
+            COALESCE(SUM(ct.valor_mensal), 0) as receita_mensal
+     FROM customers c
+     LEFT JOIN contracts ct ON ct.customer_id = c.id AND ct.tenant_id = c.tenant_id AND ct.status = 'ativo'
+     WHERE c.id = $1 AND c.tenant_id = $2
+     GROUP BY c.id`,
+    [req.params.id, req.tenantId]
+  );
+  if (!c) return res.status(404).json({ error: 'Cliente não encontrado' });
+  return res.json(c);
+});
+
+router.post('/customers', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { razao_social, cnpj, email, telefone, endereco, cidade, estado, cep, contato_nome, contato_email, contato_telefone, observacoes } = req.body;
+  if (!razao_social) return res.status(400).json({ error: 'Razão social é obrigatória' });
+  const c = await queryOne<any>(
+    `INSERT INTO customers (tenant_id, razao_social, cnpj, email, telefone, endereco, cidade, estado, cep, contato_nome, contato_email, contato_telefone, observacoes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+    [req.tenantId, razao_social, cnpj||null, email||null, telefone||null, endereco||null, cidade||null, estado||null, cep||null, contato_nome||null, contato_email||null, contato_telefone||null, observacoes||null]
+  );
+  return res.status(201).json(c);
+});
+
+router.put('/customers/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { razao_social, cnpj, email, telefone, endereco, cidade, estado, cep, contato_nome, contato_email, contato_telefone, observacoes } = req.body;
+  const c = await queryOne<any>(
+    `UPDATE customers SET razao_social=$1, cnpj=$2, email=$3, telefone=$4, endereco=$5, cidade=$6, estado=$7, cep=$8,
+     contato_nome=$9, contato_email=$10, contato_telefone=$11, observacoes=$12, updated_at=NOW()
+     WHERE id=$13 AND tenant_id=$14 RETURNING *`,
+    [razao_social, cnpj||null, email||null, telefone||null, endereco||null, cidade||null, estado||null, cep||null, contato_nome||null, contato_email||null, contato_telefone||null, observacoes||null, req.params.id, req.tenantId]
+  );
+  if (!c) return res.status(404).json({ error: 'Cliente não encontrado' });
+  return res.json(c);
+});
+
+router.delete('/customers/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const c = await queryOne<any>('SELECT id FROM customers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!c) return res.status(404).json({ error: 'Cliente não encontrado' });
+  await query('DELETE FROM customers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  return res.json({ success: true });
+});
+
+// ── Contracts ──────────────────────────────────────────────
+router.get('/contracts', auth, async (req: Request, res: Response) => {
+  const { customer_id, status } = req.query;
+  let sql = `SELECT ct.*, c.razao_social as customer_name, c.cnpj as customer_cnpj
+             FROM contracts ct
+             LEFT JOIN customers c ON c.id = ct.customer_id
+             WHERE ct.tenant_id = $1`;
+  const params: any[] = [req.tenantId];
+  if (customer_id) { params.push(customer_id); sql += ` AND ct.customer_id = $${params.length}`; }
+  if (status) { params.push(status); sql += ` AND ct.status = $${params.length}`; }
+  sql += ' ORDER BY ct.created_at DESC';
+  const rows = await query<any>(sql, params);
+  return res.json(rows);
+});
+
+router.get('/contracts/:id', auth, async (req: Request, res: Response) => {
+  const ct = await queryOne<any>(
+    `SELECT ct.*, c.razao_social as customer_name, c.cnpj as customer_cnpj, c.email as customer_email
+     FROM contracts ct
+     LEFT JOIN customers c ON c.id = ct.customer_id
+     WHERE ct.id = $1 AND ct.tenant_id = $2`,
+    [req.params.id, req.tenantId]
+  );
+  if (!ct) return res.status(404).json({ error: 'Contrato não encontrado' });
+  return res.json(ct);
+});
+
+router.post('/contracts', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { customer_id, numero_contrato, descricao, valor_mensal, data_inicio, data_fim, status, observacoes } = req.body;
+  if (!customer_id || !numero_contrato) return res.status(400).json({ error: 'customer_id e numero_contrato são obrigatórios' });
+  const ct = await queryOne<any>(
+    `INSERT INTO contracts (tenant_id, customer_id, numero_contrato, descricao, valor_mensal, data_inicio, data_fim, status, observacoes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [req.tenantId, customer_id, numero_contrato, descricao||null, valor_mensal||0, data_inicio||null, data_fim||null, status||'ativo', observacoes||null]
+  );
+  return res.status(201).json(ct);
+});
+
+router.put('/contracts/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { numero_contrato, descricao, valor_mensal, data_inicio, data_fim, status, observacoes } = req.body;
+  const ct = await queryOne<any>(
+    `UPDATE contracts SET numero_contrato=$1, descricao=$2, valor_mensal=$3, data_inicio=$4, data_fim=$5, status=$6, observacoes=$7, updated_at=NOW()
+     WHERE id=$8 AND tenant_id=$9 RETURNING *`,
+    [numero_contrato, descricao||null, valor_mensal||0, data_inicio||null, data_fim||null, status||'ativo', observacoes||null, req.params.id, req.tenantId]
+  );
+  if (!ct) return res.status(404).json({ error: 'Contrato não encontrado' });
+  return res.json(ct);
+});
+
+router.delete('/contracts/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const ct = await queryOne<any>('SELECT id FROM contracts WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!ct) return res.status(404).json({ error: 'Contrato não encontrado' });
+  await query('DELETE FROM contracts WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  return res.json({ success: true });
+});
+
+// ── Billing Cycles ─────────────────────────────────────────
+router.get('/billing/cycles', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const rows = await query<any>(
+    `SELECT bc.*, COUNT(bi.id) as total_items, COALESCE(SUM(bi.valor_total), 0) as total_calculado
+     FROM billing_cycles bc
+     LEFT JOIN billing_items bi ON bi.cycle_id = bc.id
+     WHERE bc.tenant_id = $1
+     GROUP BY bc.id
+     ORDER BY bc.data_inicio DESC`,
+    [req.tenantId]
+  );
+  return res.json(rows);
+});
+
+router.get('/billing/cycles/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const cycle = await queryOne<any>(
+    `SELECT bc.*, COUNT(bi.id) as total_items, COALESCE(SUM(bi.valor_total), 0) as total_calculado
+     FROM billing_cycles bc
+     LEFT JOIN billing_items bi ON bi.cycle_id = bc.id
+     WHERE bc.id = $1 AND bc.tenant_id = $2
+     GROUP BY bc.id`,
+    [req.params.id, req.tenantId]
+  );
+  if (!cycle) return res.status(404).json({ error: 'Ciclo não encontrado' });
+  const items = await query<any>('SELECT * FROM billing_items WHERE cycle_id=$1 ORDER BY id', [req.params.id]);
+  return res.json({ ...cycle, items });
+});
+
+router.post('/billing/cycles', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { data_inicio, data_fim, descricao, status } = req.body;
+  if (!data_inicio || !data_fim) return res.status(400).json({ error: 'data_inicio e data_fim são obrigatórios' });
+  const cycle = await queryOne<any>(
+    `INSERT INTO billing_cycles (tenant_id, data_inicio, data_fim, descricao, status)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [req.tenantId, data_inicio, data_fim, descricao||null, status||'aberto']
+  );
+  return res.status(201).json(cycle);
+});
+
+router.put('/billing/cycles/:id', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { data_inicio, data_fim, descricao, status, valor_total } = req.body;
+  const cycle = await queryOne<any>(
+    `UPDATE billing_cycles SET data_inicio=$1, data_fim=$2, descricao=$3, status=$4, valor_total=$5, updated_at=NOW()
+     WHERE id=$6 AND tenant_id=$7 RETURNING *`,
+    [data_inicio, data_fim, descricao||null, status||'aberto', valor_total||0, req.params.id, req.tenantId]
+  );
+  if (!cycle) return res.status(404).json({ error: 'Ciclo não encontrado' });
+  return res.json(cycle);
+});
+
+// ── Billing Items ──────────────────────────────────────────
+router.post('/billing/cycles/:id/items', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { descricao, quantidade, valor_unitario } = req.body;
+  if (!descricao || !valor_unitario) return res.status(400).json({ error: 'descricao e valor_unitario são obrigatórios' });
+  const qty = quantidade || 1;
+  const total = parseFloat(valor_unitario) * qty;
+  const item = await queryOne<any>(
+    `INSERT INTO billing_items (tenant_id, cycle_id, descricao, quantidade, valor_unitario, valor_total)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [req.tenantId, req.params.id, descricao, qty, valor_unitario, total]
+  );
+  // Atualizar total do ciclo
+  await query(
+    `UPDATE billing_cycles SET valor_total = (SELECT COALESCE(SUM(valor_total),0) FROM billing_items WHERE cycle_id=$1), updated_at=NOW() WHERE id=$1`,
+    [req.params.id]
+  );
+  return res.status(201).json(item);
+});
+
+router.delete('/billing/cycles/:cycleId/items/:itemId', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  await query('DELETE FROM billing_items WHERE id=$1 AND tenant_id=$2', [req.params.itemId, req.tenantId]);
+  await query(
+    `UPDATE billing_cycles SET valor_total = (SELECT COALESCE(SUM(valor_total),0) FROM billing_items WHERE cycle_id=$1), updated_at=NOW() WHERE id=$1`,
+    [req.params.cycleId]
+  );
+  return res.json({ success: true });
+});
+
+// ── Payment History ────────────────────────────────────────
+router.get('/billing/payments', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const rows = await query<any>(
+    `SELECT ph.*, c.razao_social as customer_name, bc.data_inicio as cycle_inicio, bc.data_fim as cycle_fim
+     FROM payment_history ph
+     LEFT JOIN customers c ON c.id = ph.customer_id
+     LEFT JOIN billing_cycles bc ON bc.id = ph.cycle_id
+     WHERE ph.tenant_id = $1
+     ORDER BY ph.data_pagamento DESC`,
+    [req.tenantId]
+  );
+  return res.json(rows);
+});
+
+router.post('/billing/payments', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { cycle_id, customer_id, valor, metodo_pagamento, data_pagamento, observacoes } = req.body;
+  if (!cycle_id || !customer_id || !valor) return res.status(400).json({ error: 'cycle_id, customer_id e valor são obrigatórios' });
+  const payment = await queryOne<any>(
+    `INSERT INTO payment_history (tenant_id, cycle_id, customer_id, valor, metodo_pagamento, data_pagamento, status, observacoes)
+     VALUES ($1,$2,$3,$4,$5,$6,'pago',$7) RETURNING *`,
+    [req.tenantId, cycle_id, customer_id, valor, metodo_pagamento||'pix', data_pagamento||new Date().toISOString().split('T')[0], observacoes||null]
+  );
+  // Marcar ciclo como pago se valor >= total
+  const cycle = await queryOne<any>('SELECT valor_total FROM billing_cycles WHERE id=$1', [cycle_id]);
+  if (cycle && parseFloat(valor) >= parseFloat(cycle.valor_total)) {
+    await query(`UPDATE billing_cycles SET status='pago', updated_at=NOW() WHERE id=$1`, [cycle_id]);
+  }
+  return res.status(201).json(payment);
+});
+
+// ── Billing Dashboard (resumo financeiro) ──────────────────
+router.get('/billing/dashboard', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const [summary] = await Promise.all([
+    query<any>(
+      `SELECT
+        COUNT(DISTINCT c.id) as total_customers,
+        COUNT(DISTINCT ct.id) FILTER (WHERE ct.status='ativo') as contracts_ativos,
+        COALESCE(SUM(ct.valor_mensal) FILTER (WHERE ct.status='ativo'), 0) as mrr,
+        COUNT(DISTINCT bc.id) FILTER (WHERE bc.status='aberto') as cycles_abertos,
+        COALESCE(SUM(bc.valor_total) FILTER (WHERE bc.status='aberto'), 0) as valor_pendente,
+        COALESCE(SUM(ph.valor) FILTER (WHERE ph.data_pagamento >= NOW() - INTERVAL '30 days'), 0) as recebido_30d
+       FROM customers c
+       LEFT JOIN contracts ct ON ct.customer_id = c.id AND ct.tenant_id = c.tenant_id
+       LEFT JOIN billing_cycles bc ON bc.tenant_id = c.tenant_id
+       LEFT JOIN payment_history ph ON ph.tenant_id = c.tenant_id
+       WHERE c.tenant_id = $1`,
+      [req.tenantId]
+    )
+  ]);
+  const recentPayments = await query<any>(
+    `SELECT ph.*, c.razao_social as customer_name
+     FROM payment_history ph
+     LEFT JOIN customers c ON c.id = ph.customer_id
+     WHERE ph.tenant_id = $1
+     ORDER BY ph.data_pagamento DESC LIMIT 5`,
+    [req.tenantId]
+  );
+  const openCycles = await query<any>(
+    `SELECT bc.*, COUNT(bi.id) as total_items
+     FROM billing_cycles bc
+     LEFT JOIN billing_items bi ON bi.cycle_id = bc.id
+     WHERE bc.tenant_id = $1 AND bc.status = 'aberto'
+     GROUP BY bc.id
+     ORDER BY bc.data_fim ASC`,
+    [req.tenantId]
+  );
+  return res.json({ summary: summary[0], recentPayments, openCycles });
+});
+
+// ── SuperAdmin: Billing overview de todos os tenants ───────
+router.get('/superadmin/billing/overview', auth, requireRole('superadmin'), async (_req, res) => {
+  const rows = await query<any>(
+    `SELECT t.id, t.name, t.slug, t.plan,
+            COUNT(DISTINCT c.id) as total_customers,
+            COUNT(DISTINCT ct.id) FILTER (WHERE ct.status='ativo') as contracts_ativos,
+            COALESCE(SUM(ct.valor_mensal) FILTER (WHERE ct.status='ativo'), 0) as mrr,
+            COALESCE(SUM(ph.valor) FILTER (WHERE ph.data_pagamento >= NOW() - INTERVAL '30 days'), 0) as recebido_30d
+     FROM tenants t
+     LEFT JOIN customers c ON c.tenant_id = t.id
+     LEFT JOIN contracts ct ON ct.tenant_id = t.id
+     LEFT JOIN payment_history ph ON ph.tenant_id = t.id
+     GROUP BY t.id
+     ORDER BY mrr DESC`,
+    []
+  );
+  return res.json(rows);
+});
+
+// ════════════════════════════════════════════════════════════
+// AUDITORIA
+// ════════════════════════════════════════════════════════════
+router.get('/audit-logs', auth, requireRole('admin', 'superadmin'), async (req: Request, res: Response) => {
+  const { page = 1, limit = 50, action, user_id } = req.query;
+  const offset = (Number(page) - 1) * Number(limit);
+  let sql = `SELECT al.*, u.name as user_name, u.email as user_email
+             FROM audit_logs al
+             LEFT JOIN users u ON u.id = al.user_id
+             WHERE al.tenant_id = $1`;
+  const params: any[] = [req.tenantId];
+  if (action) { params.push(action); sql += ` AND al.action ILIKE $${params.length}`; }
+  if (user_id) { params.push(user_id); sql += ` AND al.user_id = $${params.length}`; }
+  sql += ` ORDER BY al.created_at DESC LIMIT $${params.length+1} OFFSET $${params.length+2}`;
+  params.push(Number(limit), offset);
+  const rows = await query<any>(sql, params);
+  const [{ count }] = await query<any>(
+    `SELECT COUNT(*) FROM audit_logs WHERE tenant_id = $1`,
+    [req.tenantId]
+  );
+  return res.json({ logs: rows, total: Number(count), page: Number(page), limit: Number(limit) });
+});
+
+// ════════════════════════════════════════════════════════════
+// RECUPERAÇÃO DE SENHA
+// ════════════════════════════════════════════════════════════
+router.post('/auth/forgot-password', async (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'E-mail é obrigatório' });
+  const user = await queryOne<any>('SELECT id, name, email, tenant_id FROM users WHERE email=$1 AND is_active=true', [email]);
+  if (!user) {
+    // Não revelar se o e-mail existe ou não
+    return res.json({ message: 'Se o e-mail estiver cadastrado, você receberá as instruções em breve.' });
+  }
+  // Gerar token de reset (válido por 1h)
+  const token = require('crypto').randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + 3600000); // 1 hora
+  await query(
+    `UPDATE users SET reset_token=$1, reset_token_expires=$2 WHERE id=$3`,
+    [token, expires, user.id]
+  );
+  // Em produção: enviar e-mail com o token. Por ora, retornar o token para debug.
+  // TODO: integrar com serviço de e-mail (SendGrid, SES, etc.)
+  console.log(`[RESET PASSWORD] Token para ${email}: ${token}`);
+  return res.json({ message: 'Se o e-mail estiver cadastrado, você receberá as instruções em breve.', debug_token: process.env.NODE_ENV !== 'production' ? token : undefined });
+});
+
+router.post('/auth/reset-password', async (req: Request, res: Response) => {
+  const { token, new_password } = req.body;
+  if (!token || !new_password) return res.status(400).json({ error: 'Token e nova senha são obrigatórios' });
+  if (new_password.length < 8) return res.status(400).json({ error: 'A senha deve ter pelo menos 8 caracteres' });
+  const user = await queryOne<any>(
+    `SELECT id FROM users WHERE reset_token=$1 AND reset_token_expires > NOW() AND is_active=true`,
+    [token]
+  );
+  if (!user) return res.status(400).json({ error: 'Token inválido ou expirado' });
+  const hash = await bcrypt.hash(new_password, 10);
+  await query(
+    `UPDATE users SET password_hash=$1, reset_token=NULL, reset_token_expires=NULL WHERE id=$2`,
+    [hash, user.id]
+  );
+  return res.json({ message: 'Senha alterada com sucesso' });
 });
 
 
@@ -2459,7 +2868,7 @@ router.delete('/api-keys/:id', auth, requireRole('admin'), async (req: Request, 
 // ════════════════════════════════════════════════════════════
 // TRACCAR GPS TRACKING
 // ════════════════════════════════════════════════════════════
-const TRACCAR_URL = process.env.TRACCAR_URL || 'http://traccar:8082';
+const TRACCAR_GPS_URL = process.env.TRACCAR_URL || 'http://traccar:8082';
 const TRACCAR_EMAIL = process.env.TRACCAR_EMAIL || 'admin@groupates.com';
 const TRACCAR_PASSWORD = process.env.TRACCAR_PASSWORD || 'groupates2024!';
 
@@ -2471,7 +2880,7 @@ async function getTraccarSession(): Promise<string | null> {
     const { URLSearchParams } = await import('url');
     const body = new URLSearchParams({ email: TRACCAR_EMAIL, password: TRACCAR_PASSWORD }).toString();
     return new Promise((resolve) => {
-      const url = new URL(`${TRACCAR_URL}/api/session`);
+      const url = new URL(`${TRACCAR_GPS_URL}/api/session`);
       const options = {
         hostname: url.hostname,
         port: url.port || 8082,
@@ -2505,7 +2914,7 @@ async function traccarRequest(method: string, path: string, body?: any, cookie?:
     if (!sessionCookie) return { status: 401, data: { error: 'Não foi possível autenticar no Traccar' } };
     const bodyStr = body ? JSON.stringify(body) : undefined;
     return new Promise((resolve) => {
-      const url = new URL(`${TRACCAR_URL}/api${path}`);
+      const url = new URL(`${TRACCAR_GPS_URL}/api${path}`);
       const options: any = {
         hostname: url.hostname,
         port: url.port || 8082,
@@ -2558,7 +2967,7 @@ router.post('/traccar/auto-configure', auth, async (req: Request, res: Response)
        ON CONFLICT(tenant_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
       [req.tenantId, TRACCAR_EMAIL]
     ).catch(() => {});
-    return res.json({ success: true, url: TRACCAR_URL, email: TRACCAR_EMAIL });
+    return res.json({ success: true, url: TRACCAR_GPS_URL, email: TRACCAR_EMAIL });
   } catch (e: any) { return res.status(500).json({ error: e.message }); }
 });
 
@@ -2648,6 +3057,93 @@ router.get('/traccar/notifications', auth, async (req: Request, res: Response) =
     const result = await traccarRequest('GET', '/notifications');
     return res.status(result.status).json(result.data);
   } catch (e: any) { return res.status(500).json({ error: e.message }); }
+});
+
+
+
+// ── SuperAdmin: Re-provisionar tenant ──
+router.post('/superadmin/tenants/:id/provision', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  const t = await queryOne<any>('SELECT * FROM tenants WHERE id=$1', [req.params.id]);
+  if (!t) return res.status(404).json({ error: 'Tenant não encontrado' });
+  const result = await provisionTenantTraccar(t.id, t.name, t.email, t.email, '');
+  return res.json(result);
+});
+
+// ── SuperAdmin: Status de provisionamento ──
+router.get('/superadmin/tenants/:id/provision-status', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  const t = await queryOne<any>(
+    `SELECT id, name, slug, traccar_group_id, traccar_user_id, traccar_user_email, traccar_server_url, provisioned_at
+     FROM tenants WHERE id=$1`,
+    [req.params.id]
+  );
+  if (!t) return res.status(404).json({ error: 'Tenant não encontrado' });
+  return res.json({
+    ...t,
+    is_provisioned: !!t.traccar_group_id,
+  });
+});
+
+
+
+// ════════════════════════════════════════════════════════════
+// RELATÓRIO DE USO POR TENANT (SuperAdmin)
+// ════════════════════════════════════════════════════════════
+
+router.get('/superadmin/usage-report', auth, requireRole('superadmin'), async (req: Request, res: Response) => {
+  const report = await query(`
+    SELECT
+      t.id, t.name, t.slug, t.plan, t.is_active, t.created_at, t.provisioned_at,
+      t.max_devices, t.max_users,
+      COUNT(DISTINCT u.id) as user_count,
+      COUNT(DISTINCT d.id) as device_count,
+      COUNT(DISTINCT c.id) as camera_count,
+      COUNT(DISTINCT tr.id) as tracker_count,
+      COUNT(DISTINCT al.id) as alert_count_30d,
+      COALESCE(SUM(bc.amount) FILTER (WHERE bc.status='paid'), 0) as total_billed,
+      COALESCE(SUM(bc.amount) FILTER (WHERE bc.status='pending'), 0) as pending_billing
+    FROM tenants t
+    LEFT JOIN users u ON u.tenant_id=t.id
+    LEFT JOIN devices d ON d.tenant_id=t.id
+    LEFT JOIN jimi_cameras c ON c.tenant_id=t.id
+    LEFT JOIN trackers tr ON tr.tenant_id=t.id
+    LEFT JOIN alerts al ON al.tenant_id=t.id AND al.created_at > NOW()-INTERVAL '30 days'
+    LEFT JOIN billing_cycles bc ON bc.tenant_id=t.id
+    GROUP BY t.id
+    ORDER BY t.created_at DESC
+  `, []);
+  return res.json(report);
+});
+
+// Relatório de uso do próprio tenant
+router.get('/usage', auth, async (req: Request, res: Response) => {
+  const [tenant, counts] = await Promise.all([
+    queryOne<any>('SELECT * FROM tenants WHERE id=$1', [req.tenantId]),
+    queryOne<any>(`
+      SELECT
+        COUNT(DISTINCT u.id) as user_count,
+        COUNT(DISTINCT d.id) as device_count,
+        COUNT(DISTINCT c.id) as camera_count,
+        COUNT(DISTINCT tr.id) as tracker_count
+      FROM tenants t
+      LEFT JOIN users u ON u.tenant_id=t.id
+      LEFT JOIN devices d ON d.tenant_id=t.id
+      LEFT JOIN jimi_cameras c ON c.tenant_id=t.id
+      LEFT JOIN trackers tr ON tr.tenant_id=t.id
+      WHERE t.id=$1
+    `, [req.tenantId]),
+  ]);
+  return res.json({
+    tenant,
+    usage: counts,
+    limits: {
+      max_devices: tenant?.max_devices,
+      max_users: tenant?.max_users,
+    },
+    utilization: {
+      devices: counts ? Math.round((Number(counts.device_count) / (tenant?.max_devices || 1)) * 100) : 0,
+      users: counts ? Math.round((Number(counts.user_count) / (tenant?.max_users || 1)) * 100) : 0,
+    }
+  });
 });
 
 

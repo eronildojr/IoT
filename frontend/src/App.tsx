@@ -23,6 +23,11 @@ import WalkieFleet from './pages/WalkieFleet'
 import Tuya from './pages/Tuya'
 import Mapa from './pages/Mapa'
 import Diagnostico from './pages/Diagnostico'
+import Billing from './pages/Billing'
+import Customers from './pages/Customers'
+import Contracts from './pages/Contracts'
+import AuditLogs from './pages/AuditLogs'
+import { ForgotPassword, ResetPassword } from './pages/ForgotPassword'
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30000 } } })
 
@@ -74,7 +79,13 @@ export default function App() {
             <Route path="/diagnostico" element={<AdminGuard><Diagnostico /></AdminGuard>} />
             <Route path="/superadmin" element={<SuperGuard><SuperAdmin /></SuperGuard>} />
           </Route>
-        </Routes>
+                  <Route path='/billing' element={<Billing />} />
+          <Route path='/customers' element={<Customers />} />
+          <Route path='/contracts' element={<Contracts />} />
+          <Route path='/audit-logs' element={<AuditLogs />} />
+          <Route path='/forgot-password' element={<ForgotPassword />} />
+          <Route path='/reset-password' element={<ResetPassword />} />
+</Routes>
       </BrowserRouter>
     </QueryClientProvider>
   )

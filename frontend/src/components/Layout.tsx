@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Cpu, BookOpen, MapPin, Bell, Zap,
   BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route,
   Camera, Wifi, Plug, Map, Activity
-} from 'lucide-react'
+, Receipt, Building2, FileText, ClipboardList, Key} from 'lucide-react'
 
 const nav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -24,6 +24,10 @@ const nav = [
   { to: '/analytics', icon: BarChart3, label: 'Análise & IA' },
   { to: '/users', icon: Users, label: 'Usuários' },
   { to: '/settings', icon: Settings, label: 'Configurações' },
+  { to: '/billing', icon: Receipt, label: 'Faturamento' },
+  { to: '/customers', icon: Building2, label: 'Clientes' },
+  { to: '/contracts', icon: FileText, label: 'Contratos' },
+  { to: '/audit-logs', icon: ClipboardList, label: 'Auditoria' },
 ]
 
 const adminNav = [
@@ -88,6 +92,7 @@ export default function Layout() {
             </NavLink>
           )}
         </nav>
+      <div className="text-xs text-gray-500 text-center py-2">v1.0-15</div>
 
         {/* User */}
         <div className="px-3 py-3 border-t border-gray-800">
