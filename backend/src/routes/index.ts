@@ -159,20 +159,22 @@ router.get('/devices/stats', auth, async (req: Request, res: Response) => {
   return res.json(s);
 });
 
-// ============================================================
-// Obter tópicos MQTT de um dispositivo (DEVE VIR ANTES de :id)
+
+// Obter tópicos MQTT de um dispositivo (ANTES da rota genérica /:id)
 router.get('/devices/:id/mqtt-topics', auth, async (req: Request, res: Response) => {
   const d = await queryOne<any>('SELECT id, tenant_id, identifier, mqtt_topic_telemetry, mqtt_topic_command, mqtt_topic_status, mqtt_username, mqtt_password FROM devices WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
   if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
-  const topics = buildDeviceTopics(req.tenantId as string, d.id as string);
+  const tenantId = req.tenantId as string;
+  const identifier = d.identifier as string;
+  const topics = {
+    telemetry: d.mqtt_topic_telemetry || `iot/${tenantId}/${identifier}/telemetry`,
+    command: d.mqtt_topic_command || `iot/${tenantId}/${identifier}/command`,
+    status: d.mqtt_topic_status || `iot/${tenantId}/${identifier}/status`,
+  };
   return res.json({
     device_id: d.id,
     identifier: d.identifier,
-    topics: {
-      telemetry: d.mqtt_topic_telemetry || topics.telemetry,
-      command: d.mqtt_topic_command || topics.command,
-      status: d.mqtt_topic_status || topics.status,
-    },
+    topics,
     credentials: {
       host: process.env.MQTT_HOST || '104.237.5.59',
       port: 1883,
@@ -186,6 +188,7 @@ router.get('/devices/:id/mqtt-topics', auth, async (req: Request, res: Response)
       timestamp: new Date().toISOString()
     }
   });
+});
 
 router.get('/devices/:id', auth, async (req: Request, res: Response) => {
   const d = await queryOne<any>(`SELECT d.*,dm.name as model_name,dm.category,dm.data_schema FROM devices d LEFT JOIN device_models dm ON dm.id=d.model_id WHERE d.id=$1 AND d.tenant_id=$2`, [req.params.id, req.tenantId]);
@@ -3183,6 +3186,32 @@ export default router;
 // ============================================================
 
 // Obter tópicos MQTT de um dispositivo
+router.get('/devices/:id/mqtt-topics', auth, async (req: Request, res: Response) => {
+  const d = await queryOne<any>('SELECT id, tenant_id, identifier, mqtt_topic_telemetry, mqtt_topic_command, mqtt_topic_status, mqtt_username, mqtt_password FROM devices WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
+  const topics = buildDeviceTopics(req.tenantId as string, d.id as string);
+  return res.json({
+    device_id: d.id,
+    identifier: d.identifier,
+    topics: {
+      telemetry: d.mqtt_topic_telemetry || topics.telemetry,
+      command: d.mqtt_topic_command || topics.command,
+      status: d.mqtt_topic_status || topics.status,
+    },
+    credentials: {
+      host: process.env.MQTT_HOST || '104.237.5.59',
+      port: 1883,
+      websocket_port: 9001,
+      username: d.mqtt_username || 'iot_device',
+      password: d.mqtt_password || 'iot@device2024',
+    },
+    example_payload: {
+      temperature: 25.5,
+      humidity: 60.2,
+      timestamp: new Date().toISOString()
+    }
+  });
+});
 
 // Enviar comando para um dispositivo via MQTT
 router.post('/devices/:id/command', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
