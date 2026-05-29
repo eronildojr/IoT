@@ -28,6 +28,10 @@ import Customers from './pages/Customers'
 import Contracts from './pages/Contracts'
 import AuditLogs from './pages/AuditLogs'
 import { ForgotPassword, ResetPassword } from './pages/ForgotPassword'
+import WhatsAppConfig from './pages/whatsapp/WhatsAppConfig'
+import WaCategories from './pages/whatsapp/Categories'
+import WaDispatch from './pages/whatsapp/Dispatch'
+import WaOccurrences from './pages/whatsapp/Occurrences'
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30000 } } })
 
@@ -76,6 +80,10 @@ export default function App() {
             <Route path="/cameras" element={<Cameras />} />
             <Route path="/walkiefleet" element={<WalkieFleet />} />
             <Route path="/tuya" element={<Tuya />} />
+            <Route path="/whatsapp/config" element={<WhatsAppConfig />} />
+            <Route path="/whatsapp/categorias" element={<WaCategories />} />
+            <Route path="/whatsapp/despacho" element={<WaDispatch />} />
+            <Route path="/whatsapp/ocorrencias" element={<WaOccurrences />} />
             <Route path="/routing" element={<Routing />} />
             <Route path="/routing/:id" element={<RouteDetail />} />
             <Route path="/billing" element={<Billing />} />

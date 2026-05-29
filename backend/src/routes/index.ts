@@ -12,6 +12,7 @@ import multer from 'multer';
 import crypto from 'crypto';
 import * as fsPromises from 'fs/promises';
 import path from 'path';
+import { getTraccar, getTraccarPositions, haversineMeters, findNearestAgent } from '../lib/dispatch';
 
 
 // ════════════════════════════════════════════════════════════
@@ -873,11 +874,7 @@ router.post('/auth/reset-password', async (req: Request, res: Response) => {
 // TRACCAR
 // ════════════════════════════════════════════════════════════
 
-async function getTraccar(tenantId: string) {
-  const t = await queryOne<any>('SELECT traccar_server_url,traccar_admin_user,traccar_admin_pass FROM tenants WHERE id=$1', [tenantId]);
-  if (!t?.traccar_server_url) return null;
-  return { base: t.traccar_server_url.replace(/\/$/, ''), auth: { username: t.traccar_admin_user || 'admin', password: t.traccar_admin_pass || 'admin' } };
-}
+// getTraccar / getTraccarPositions / haversineMeters / findNearestAgent → ../lib/dispatch
 
 router.get('/traccar/status', auth, async (req: Request, res: Response) => {
   const cfg = await getTraccar(req.tenantId!);
@@ -1871,24 +1868,7 @@ router.get('/ip-cameras/by-monitor/:mid/snapshot.jpg', auth, async (req: Request
 // DISPATCHER + WF AGENTS
 // ════════════════════════════════════════════════════════════
 
-function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000;
-  const toRad = (d: number) => d * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
-
 const SEVERITY_RANK: Record<string, number> = { info: 0, warning: 1, critical: 2 };
-const AGENT_ONLINE_MS = 300000; // 5 min
-
-async function getTraccarPositions(tenantId: string): Promise<any[]> {
-  const cfg = await getTraccar(tenantId);
-  if (!cfg) throw new Error('traccar_not_configured');
-  const r = await axios.get(`${cfg.base}/api/positions`, { auth: cfg.auth, timeout: 5000 });
-  return Array.isArray(r.data) ? r.data : [];
-}
 
 async function dispatchEventAsync(eventId: number, cameraId: number, severity: string, tenantId: string): Promise<void> {
   try {
@@ -1903,41 +1883,19 @@ async function dispatchEventAsync(eventId: number, cameraId: number, severity: s
     if (cam.latitude == null || cam.longitude == null)
       return await markDispatch(eventId, 'no_camera_coords');
 
-    const agents = await query<any>('SELECT id, wf_username, display_name, traccar_device_id FROM wf_agents WHERE enabled=true AND traccar_device_id IS NOT NULL');
-    if (!agents.length) return await markDispatch(eventId, 'no_agent_in_radius', 'no_enabled_agents');
-
-    let positions: any[];
-    try {
-      positions = await getTraccarPositions(tenantId);
-    } catch (e: any) {
-      return await markDispatch(eventId, 'traccar_error', e.message);
-    }
-
-    const now = Date.now();
-    const freshPos = new Map<number, any>();
-    for (const p of positions) {
-      if (p.valid && (now - new Date(p.fixTime).getTime()) < AGENT_ONLINE_MS)
-        freshPos.set(p.deviceId, p);
-    }
-
-    let best: { agent: any; dist: number } | null = null;
-    for (const ag of agents) {
-      const pos = freshPos.get(ag.traccar_device_id);
-      if (!pos) continue;
-      const dist = haversineMeters(Number(cam.latitude), Number(cam.longitude), pos.latitude, pos.longitude);
-      if (dist > cam.dispatch_max_radius_m) continue;
-      if (!best || dist < best.dist) best = { agent: ag, dist };
-    }
-
-    if (!best) return await markDispatch(eventId, 'no_agent_in_radius');
+    // Motor de "agente mais próximo" compartilhado (../lib/dispatch).
+    const result = await findNearestAgent(Number(cam.latitude), Number(cam.longitude), cam.dispatch_max_radius_m, tenantId);
+    if (result.reason === 'no_enabled_agents') return await markDispatch(eventId, 'no_agent_in_radius', 'no_enabled_agents');
+    if (result.reason === 'traccar_error') return await markDispatch(eventId, 'traccar_error', result.error);
+    if (!result.agent) return await markDispatch(eventId, 'no_agent_in_radius');
 
     await query(
       `UPDATE ip_camera_events SET dispatched_to_user_id=$1, dispatched_to_wf_username=$2,
        dispatched_to_distance_m=$3, dispatched_at=NOW(), dispatch_status='selected', dispatch_error=NULL
        WHERE id=$4`,
-      [String(best.agent.id), best.agent.wf_username, Math.round(best.dist), eventId],
+      [String(result.agent.id), result.agent.wf_username, result.distance_m, eventId],
     );
-    console.log(`[dispatch] event=${eventId} → ${best.agent.wf_username} (${Math.round(best.dist)}m)`);
+    console.log(`[dispatch] event=${eventId} → ${result.agent.wf_username} (${result.distance_m}m)`);
   } catch (e: any) {
     console.error(`[dispatch] event=${eventId} failed:`, e.message);
     await markDispatch(eventId, 'traccar_error', e.message).catch(() => {});

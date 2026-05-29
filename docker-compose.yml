@@ -56,6 +56,11 @@ services:
       WF_BOT_PASSWORD: ${WF_BOT_PASSWORD:-}
       WF_BOT_DEVICE_ID_FILE: ${WF_BOT_DEVICE_ID_FILE:-/var/groupates/wf_bot_device_id.txt}
       WF_RELAY_WS_URL: ws://groupates_walkiefleet:8070/ws
+      WHATSMIAU_API_KEY: ${WHATSMIAU_API_KEY:-}
+      WHATSMIAU_INSTANCE: ${WHATSMIAU_INSTANCE:-groupates_ocorrencias}
+      WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET:-}
+      AI_SERVICE_URL: ${AI_SERVICE_URL:-http://groupates_ai:8090}
+      WA_BOT_ENABLED: ${WA_BOT_ENABLED:-false}
     env_file:
       - /etc/groupates/shinobi.env
     depends_on:

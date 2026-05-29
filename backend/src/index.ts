@@ -11,6 +11,7 @@ import routes from './routes';
 import routingRoutes from './routes/routing';
 import jimiRoutes from './routes/jimi';
 import diagnosticsRoutes from './routes/diagnostics';
+import whatsappRoutes from './routes/whatsapp';
 import { registerWalkieFleetWS } from './walkiefleet-ws';
 
 dotenv.config();
@@ -67,6 +68,7 @@ app.use('/api', routes);
 app.use('/api/routing', routingRoutes);
 app.use('/api/jimi', jimiRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
 
 // Start WalkieFleet message client
 import { wfClient } from './lib/wf-client';
