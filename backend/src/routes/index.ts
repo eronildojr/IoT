@@ -1,3 +1,4 @@
+import { publishMqtt, buildDeviceTopics } from "../lib/mqtt";
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -1312,7 +1313,7 @@ router.get('/ip-cameras', auth, async (req: Request, res: Response) => {
   let sql = 'SELECT * FROM ip_cameras';
   if (activeOnly) sql += ' WHERE active = TRUE';
   sql += ' ORDER BY name';
-  const rows = await query(sql);
+  const rows: any[] = await query(sql);
   return res.json(rows.map(stripPasswordFromRow));
 });
 
@@ -2056,7 +2057,7 @@ async function nextFreeInterface(): Promise<string> {
 
 router.get('/vpn/tunnels', auth, requireRole('admin'), async (_req: Request, res: Response) => {
   try {
-    const rows = await query(
+    const rows: any[] = await query(
       `SELECT id, name, interface_name, address, endpoint, allowed_ips, public_key,
               enabled, status, last_handshake_at, bytes_rx, bytes_tx, last_error,
               last_status_check, notes, created_at, updated_at
@@ -2282,7 +2283,7 @@ router.post('/wf/send-test-message', auth, requireRole('admin'), async (req: Req
 
 router.get('/wf/messages', auth, async (_req: Request, res: Response) => {
   try {
-    const rows = await query(
+    const rows: any[] = await query(
       `SELECT id, job_id, to_name, text, status, sent_at, delivered_at, error_message, created_at
        FROM wf_messages ORDER BY id DESC LIMIT 50`
     );
@@ -3148,3 +3149,78 @@ router.get('/usage', auth, async (req: Request, res: Response) => {
 
 
 export default router;
+
+// ============================================================
+// MQTT - Tópicos e comandos para dispositivos
+// ============================================================
+
+// Obter tópicos MQTT de um dispositivo
+router.get('/devices/:id/mqtt-topics', auth, async (req: Request, res: Response) => {
+  const d = await queryOne<any>('SELECT id, tenant_id, identifier, mqtt_topic_telemetry, mqtt_topic_command, mqtt_topic_status, mqtt_username, mqtt_password FROM devices WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
+  const topics = buildDeviceTopics(req.tenantId as string, d.id as string);
+  return res.json({
+    device_id: d.id,
+    identifier: d.identifier,
+    topics: {
+      telemetry: d.mqtt_topic_telemetry || topics.telemetry,
+      command: d.mqtt_topic_command || topics.command,
+      status: d.mqtt_topic_status || topics.status,
+    },
+    credentials: {
+      host: process.env.MQTT_HOST || '104.237.5.59',
+      port: 1883,
+      websocket_port: 9001,
+      username: d.mqtt_username || 'iot_device',
+      password: d.mqtt_password || 'iot@device2024',
+    },
+    example_payload: {
+      temperature: 25.5,
+      humidity: 60.2,
+      timestamp: new Date().toISOString()
+    }
+  });
+});
+
+// Enviar comando para um dispositivo via MQTT
+router.post('/devices/:id/command', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
+  const d = await queryOne<any>('SELECT id, tenant_id, mqtt_topic_command FROM devices WHERE id=$1 AND tenant_id=$2', [req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
+  const topic = d.mqtt_topic_command || buildDeviceTopics(req.tenantId as string, d.id as string).command;
+  const payload = { ...req.body, sent_at: new Date().toISOString(), sent_by: req.user!.id };
+  try {
+    publishMqtt(topic, payload);
+    return res.json({ ok: true, topic, payload });
+  } catch (e: any) {
+    return res.status(500).json({ error: 'Erro ao publicar comando MQTT: ' + e.message });
+  }
+});
+
+// Receber telemetria via HTTP (alternativa ao MQTT direto)
+router.post('/devices/ingest/:identifier', async (req: Request, res: Response) => {
+  const token = req.headers['x-device-token'] as string;
+  if (!token) return res.status(401).json({ error: 'Token de dispositivo obrigatório' });
+  const d = await queryOne<any>('SELECT id, tenant_id FROM devices WHERE identifier=$1', [req.params.identifier]);
+  if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
+  const data = req.body;
+  await query('INSERT INTO device_telemetry(device_id, tenant_id, data) VALUES($1,$2,$3)', [d.id, d.tenant_id, JSON.stringify(data)]);
+  await query('UPDATE devices SET last_seen_at=NOW(), status=$1, updated_at=NOW() WHERE id=$2', ['online', d.id]);
+  return res.json({ ok: true, received_at: new Date().toISOString() });
+});
+
+// Atualizar tópicos MQTT de um dispositivo
+router.put('/devices/:id/mqtt-config', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
+  const { mqtt_topic_telemetry, mqtt_topic_command, mqtt_topic_status, mqtt_username, mqtt_password } = req.body;
+  const d = await queryOne<any>('UPDATE devices SET mqtt_topic_telemetry=$1, mqtt_topic_command=$2, mqtt_topic_status=$3, mqtt_username=$4, mqtt_password=$5, updated_at=NOW() WHERE id=$6 AND tenant_id=$7 RETURNING *',
+    [mqtt_topic_telemetry, mqtt_topic_command, mqtt_topic_status, mqtt_username, mqtt_password, req.params.id, req.tenantId]);
+  if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
+  return res.json(d);
+});
+
+// Listar últimas telemetrias de um dispositivo
+router.get('/devices/:id/telemetry/latest', auth, async (req: Request, res: Response) => {
+  const limit = parseInt(req.query.limit as string) || 20;
+  const rows: any[] = await query('SELECT data, received_at FROM device_telemetry WHERE device_id=$1 ORDER BY received_at DESC LIMIT $2', [req.params.id, limit]);
+  return res.json({ data: rows || [] });
+});
+
