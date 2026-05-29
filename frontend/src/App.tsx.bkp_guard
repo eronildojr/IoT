@@ -58,8 +58,6 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/driver/:token" element={<DriverView />} />
-          <Route path="/forgot-password" element={<ForgotPassword />} />
-          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route element={<Guard><Layout /></Guard>}>
             <Route path="/dashboard" element={<Dashboard />} />
@@ -78,14 +76,16 @@ export default function App() {
             <Route path="/tuya" element={<Tuya />} />
             <Route path="/routing" element={<Routing />} />
             <Route path="/routing/:id" element={<RouteDetail />} />
-            <Route path="/billing" element={<Billing />} />
-            <Route path="/customers" element={<Customers />} />
-            <Route path="/contracts" element={<Contracts />} />
-            <Route path="/audit-logs" element={<AuditLogs />} />
             <Route path="/diagnostico" element={<AdminGuard><Diagnostico /></AdminGuard>} />
             <Route path="/superadmin" element={<SuperGuard><SuperAdmin /></SuperGuard>} />
           </Route>
-        </Routes>
+                  <Route path='/billing' element={<Billing />} />
+          <Route path='/customers' element={<Customers />} />
+          <Route path='/contracts' element={<Contracts />} />
+          <Route path='/audit-logs' element={<AuditLogs />} />
+          <Route path='/forgot-password' element={<ForgotPassword />} />
+          <Route path='/reset-password' element={<ResetPassword />} />
+</Routes>
       </BrowserRouter>
     </QueryClientProvider>
   )

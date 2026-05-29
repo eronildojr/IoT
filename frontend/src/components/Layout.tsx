@@ -17,7 +17,6 @@ const nav = [
   { to: '/trackers', icon: MapPin, label: 'Rastreadores GPS' },
   { to: '/cameras', icon: Camera, label: 'Cameras' },
   { to: '/walkiefleet', icon: Wifi, label: 'WalkieFleet' },
-  { to: '/tuya', icon: Plug, label: 'Tuya IoT' },
   { to: '/alerts', icon: Bell, label: 'Alertas' },
   { to: '/automations', icon: Zap, label: 'Automações' },
   { to: '/routing', icon: Route, label: 'Roteirização' },

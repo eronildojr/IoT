@@ -1365,7 +1365,14 @@ function IpLiveModal({ camera, onClose }: { camera: any; onClose: () => void }) 
           const hlsUrl = info.hls + (info.hls.includes('?') ? '&' : '?') + 'token=' + token
           const Hls = (await import('hls.js')).default
           if (Hls.isSupported() && videoRef.current) {
-            const hls = new Hls({ enableWorker: false, lowLatencyMode: true, backBufferLength: 10 })
+            const hls = new Hls({
+              enableWorker: false,
+              lowLatencyMode: true,
+              backBufferLength: 10,
+              xhrSetup: (xhr: any) => {
+                xhr.setRequestHeader('Authorization', 'Bearer ' + token)
+              }
+            })
             hlsRef.current = hls
             hls.loadSource(hlsUrl)
             hls.attachMedia(videoRef.current)
