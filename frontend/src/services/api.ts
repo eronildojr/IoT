@@ -41,6 +41,10 @@ export const devicesApi = {
   ingest: (id: string, data: any) => api.post(`/devices/${id}/telemetry`, { data }),
   setConnection: (id: string, d: any) => api.put(`/devices/${id}/connection`, d),
   testConnection: (id: string) => api.post(`/devices/${id}/connection/test`, {}),
+  mqttTopics: (id: string) => api.get(`/devices/${id}/mqtt-topics`),
+  sendCommand: (id: string, cmd: any) => api.post(`/devices/${id}/command`, cmd),
+  telemetryLatest: (id: string, limit?: number) => api.get(`/devices/${id}/telemetry/latest`, { params: { limit } }),
+  updateMqttConfig: (id: string, cfg: any) => api.put(`/devices/${id}/mqtt-config`, cfg),
 }
 
 export const modelsApi = {
