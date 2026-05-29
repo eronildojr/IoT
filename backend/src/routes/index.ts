@@ -186,7 +186,6 @@ router.get('/devices/:id/mqtt-topics', auth, async (req: Request, res: Response)
       timestamp: new Date().toISOString()
     }
   });
-}
 
 router.get('/devices/:id', auth, async (req: Request, res: Response) => {
   const d = await queryOne<any>(`SELECT d.*,dm.name as model_name,dm.category,dm.data_schema FROM devices d LEFT JOIN device_models dm ON dm.id=d.model_id WHERE d.id=$1 AND d.tenant_id=$2`, [req.params.id, req.tenantId]);
