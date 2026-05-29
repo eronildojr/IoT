@@ -45,6 +45,7 @@ export const devicesApi = {
   sendCommand: (id: string, cmd: any) => api.post(`/devices/${id}/command`, cmd),
   telemetryLatest: (id: string, limit?: number) => api.get(`/devices/${id}/telemetry/latest`, { params: { limit } }),
   updateMqttConfig: (id: string, cfg: any) => api.put(`/devices/${id}/mqtt-config`, cfg),
+  listModels: (p?: any) => api.get("/device-models", { params: p }),
 }
 
 export const modelsApi = {
