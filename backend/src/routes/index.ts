@@ -3184,7 +3184,6 @@ export default router;
 // ============================================================
 
 // Obter tópicos MQTT de um dispositivo
-);
 
 // Enviar comando para um dispositivo via MQTT
 router.post('/devices/:id/command', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
