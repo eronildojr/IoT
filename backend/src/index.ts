@@ -12,7 +12,11 @@ import routingRoutes from './routes/routing';
 import jimiRoutes from './routes/jimi';
 import diagnosticsRoutes from './routes/diagnostics';
 import whatsappRoutes from './routes/whatsapp';
-import { registerWalkieFleetWS } from './walkiefleet-ws';
+import analyticsRoutes from './routes/analytics';
+import facialRoutes from './routes/facial';
+import facialExtendedRoutes from './routes/facial_extended';
+import employeesAlertsRoutes from './routes/employees_alerts';
+import { startChirpstackBridge, getChirpstackBridgeStatus } from './services/chirpstackBridge';
 
 dotenv.config();
 
@@ -69,6 +73,10 @@ app.use('/api/routing', routingRoutes);
 app.use('/api/jimi', jimiRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/facial', facialRoutes);
+app.use('/api/facial', facialExtendedRoutes);
+app.use('/api/employees-alerts', employeesAlertsRoutes);
 
 // Start WalkieFleet message client
 import { wfClient } from './lib/wf-client';
@@ -92,12 +100,16 @@ app.use((err: any, _req: any, res: any, _next: any) => {
 
 // Rodar migrações e iniciar servidor
 runMigrations().then(() => {
+  // Iniciar bridge ChirpStack LoRaWAN
+  try {
+    startChirpstackBridge();
+  } catch (err) {
+    console.error('[ChirpStack Bridge] Falha ao iniciar:', err);
+  }
+
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[IoT Platform] Backend rodando na porta ${PORT}`);
   });
-
-  // WalkieFleet WebSocket (PTT em tempo real)
-  registerWalkieFleetWS(server);
 
   // Graceful shutdown
   const shutdown = (signal: string) => {

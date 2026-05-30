@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { devicesApi } from '../services/api'
+import api, { devicesApi } from '../services/api'
 import { Link } from 'react-router-dom'
 import { Plus, Search, Cpu, Wifi, WifiOff, AlertTriangle, Trash2, Edit, RefreshCw, MapPin, Radio, Copy, Eye, EyeOff, Send, Activity } from 'lucide-react'
 
@@ -24,7 +24,20 @@ export default function Devices() {
   const [showMqtt, setShowMqtt] = useState<string | null>(null)
   const [showPwd, setShowPwd] = useState(false)
   const [editDevice, setEditDevice] = useState<any>(null)
-  const [form, setForm] = useState({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '' })
+  const [syncing, setSyncing] = useState(false)
+  const syncChirpstack = async () => {
+    setSyncing(true)
+    try {
+      const r = await api.get('/lorawan/sync')
+      qc.invalidateQueries({ queryKey: ['devices'] })
+      alert(r.data.message || 'Sincronização concluída!')
+    } catch (e: any) {
+      alert('Erro ao sincronizar: ' + (e?.response?.data?.error || e.message))
+    } finally {
+      setSyncing(false)
+    }
+  }
+  const [form, setForm] = useState({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' })
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['devices', search, status, protocol],
@@ -43,8 +56,10 @@ export default function Devices() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['devices'] }),
   })
   const create = useMutation({
-    mutationFn: (d: any) => devicesApi.create(d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setShowCreate(false); setForm({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '' }) },
+    mutationFn: (d: any) => d.protocol === 'lorawan' 
+        ? api.post('/lorawan/devices', d).then(r => r.data)
+        : devicesApi.create(d),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setShowCreate(false); setForm({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' }) },
   })
 
   const devices: any[] = data?.devices || []
@@ -61,9 +76,15 @@ export default function Devices() {
           <h1 className="text-2xl font-bold text-white flex items-center gap-2"><Cpu className="w-7 h-7 text-cyan-400" /> Dispositivos IoT</h1>
           <p className="text-gray-400 text-sm mt-1">Gerencie equipamentos MQTT, LoRaWAN, WiFi e mais</p>
         </div>
-        <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-          <Plus className="w-4 h-4" /> Novo Dispositivo
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => syncChirpstack()} disabled={syncing}
+            className="flex items-center gap-2 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/50 text-purple-300 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50">
+            <Radio className="w-4 h-4" /> {syncing ? 'Sincronizando...' : 'Sincronizar ChirpStack'}
+          </button>
+          <button onClick={() => setShowCreate(true)} className="flex items-center gap-2 bg-cyan-600 hover:bg-cyan-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
+            <Plus className="w-4 h-4" /> Novo Dispositivo
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -103,6 +124,7 @@ export default function Devices() {
           <option value="">Todos os protocolos</option>
           <option value="mqtt">MQTT</option>
           <option value="lorawan">LoRaWAN</option>
+          <option value="lorawan">LoRaWAN</option>
           <option value="wifi">WiFi</option>
           <option value="lte">LTE</option>
           <option value="bluetooth">Bluetooth</option>
@@ -139,6 +161,13 @@ export default function Devices() {
                   <div>
                     <h3 className="font-semibold text-white text-sm">{d.name}</h3>
                     <p className="text-xs text-gray-400 font-mono">{d.identifier}</p>
+                    {d.lorawan_dev_eui && (
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-xs text-purple-400 font-mono">DevEUI: {d.lorawan_dev_eui.toUpperCase()}</span>
+                        {d.lorawan_region && <span className="text-xs bg-purple-500/20 text-purple-300 px-1 rounded">{d.lorawan_region}</span>}
+                        {d.lorawan_last_rssi != null && <span className="text-xs text-gray-500">{d.lorawan_last_rssi}dBm</span>}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <span className={`text-xs px-2 py-1 rounded-full font-medium ${protocolColor[d.protocol] || 'text-gray-400 bg-gray-700'}`}>
@@ -233,6 +262,36 @@ export default function Devices() {
                   <label className="block text-xs text-gray-400 mb-1">Observações</label>
                   <textarea value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} rows={2} placeholder="Informações adicionais..." className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500 resize-none" />
                 </div>
+                {form.protocol === 'lorawan' && (
+                  <div className="col-span-2 space-y-3 border border-purple-500/30 rounded-lg p-3 bg-purple-500/5">
+                    <div className="text-xs font-semibold text-purple-400 uppercase tracking-wide">Configuracao LoRaWAN</div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">DevEUI *</label>
+                      <input value={form.devEUI || ''} onChange={e => setForm(f => ({ ...f, devEUI: e.target.value, identifier: 'lorawan_' + e.target.value.toLowerCase().replace(/[^0-9a-f]/g,'') }))} placeholder="0102030405060708" maxLength={16}
+                        className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white font-mono placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                      <p className="text-xs text-gray-500 mt-1">16 caracteres hexadecimais</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Regiao</label>
+                        <select value={form.lorawanRegion || 'EU868'} onChange={e => setForm(f => ({ ...f, lorawanRegion: e.target.value }))}
+                          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                          <option value="EU868">EU868</option>
+                          <option value="US915">US915</option>
+                          <option value="AU915">AU915</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-400 mb-1">Join Type</label>
+                        <select value={form.joinType || 'OTAA'} onChange={e => setForm(f => ({ ...f, joinType: e.target.value }))}
+                          className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500">
+                          <option value="OTAA">OTAA</option>
+                          <option value="ABP">ABP</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               {form.protocol === 'mqtt' && form.identifier && (
                 <div className="bg-cyan-950/40 border border-cyan-800/40 rounded-xl p-4">
@@ -247,7 +306,13 @@ export default function Devices() {
             </div>
             <div className="p-6 border-t border-gray-700 flex gap-3 justify-end">
               <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancelar</button>
-              <button onClick={() => create.mutate({ ...form, modelId: form.modelId || undefined })} disabled={!form.name || !form.identifier || create.isPending} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors">
+              <button onClick={() => {
+                  if (form.protocol === 'lorawan') {
+                    create.mutate({ name: form.name, devEUI: form.devEUI, region: form.lorawanRegion, joinType: form.joinType, notes: form.notes, modelId: form.modelId || undefined } as any)
+                  } else {
+                    create.mutate({ ...form, modelId: form.modelId || undefined })
+                  }
+                }} disabled={!form.name || (!form.identifier && form.protocol !== 'lorawan') || (form.protocol === 'lorawan' && !form.devEUI) || create.isPending} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors">
                 {create.isPending ? 'Criando...' : 'Criar Dispositivo'}
               </button>
             </div>

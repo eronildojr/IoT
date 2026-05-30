@@ -1,16 +1,19 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import api from '../services/api'
 import { camerasApi, jimiApi, devicesApi, ipCamerasApi, vpnApi, eventsApi } from '../services/api'
 import { useAuth } from '../store/auth'
 import {
   Camera, CameraOff, Plus, Search, X, Loader2, Trash2, Wifi, WifiOff,
   Video, Eye, AlertTriangle, MapPin, Play, Smartphone,
   Navigation, Image, Send, ChevronDown, Truck, Radio,
-  Monitor, Settings, CheckCircle, XCircle, Edit2, Power,
-  Crosshair, LocateFixed
+  Monitor, Settings, CheckCircle, XCircle, Edit2, Power, BarChart2,
+  Crosshair, LocateFixed, Info, Cpu, Zap, Thermometer, Shield, Wifi as WifiIcon, HardDrive,
+  ScanFace, Users, Activity, Upload, Filter, ShieldOff
 } from 'lucide-react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import FacialExtended from '../components/FacialExtended';
 
 // Fix Leaflet default marker icons in Vite
 delete (L.Icon.Default.prototype as any)._getIconUrl
@@ -116,8 +119,863 @@ const EMPTY_IP_FORM: IpCameraForm = {
 
 // ─── Main component ────────────────────────────────────────────
 
+
+// ═══════════════════════════════════════════════════════════════════
+// CameraAnalyticsModal — Analíticos de Vídeo por Câmera
+// ═══════════════════════════════════════════════════════════════════
+const ANALYTIC_META: Record<string, { label: string; description: string; category: string; color: string }> = {
+  motion_detection:  { label: 'Detecção de Movimento',      description: 'Detecta qualquer movimento na cena capturada pela câmera',                    category: 'Detecção',    color: 'yellow' },
+  human_detection:   { label: 'Detecção Humana',            description: 'Identifica e rastreia a presença de pessoas na cena',                         category: 'Detecção',    color: 'blue' },
+  intrusion:         { label: 'Detecção de Intrusão',       description: 'Alerta quando um objeto ou pessoa entra em zona proibida configurada',         category: 'Segurança',   color: 'red' },
+  line_crossing:     { label: 'Cruzamento de Linha',        description: 'Alerta quando objeto ou pessoa cruza uma linha virtual configurada',           category: 'Segurança',   color: 'orange' },
+  strobe_alarm:      { label: 'Alarme Estroboscópico',      description: 'Ativa luz de alerta visual integrada na câmera ao detectar evento',            category: 'Alarme',      color: 'yellow' },
+  siren_alarm:       { label: 'Sirene de Alarme',           description: 'Ativa alarme sonoro integrado na câmera ao detectar evento',                   category: 'Alarme',      color: 'red' },
+  colorvu:           { label: 'ColorVu (Colorido 24h)',     description: 'Captura imagem colorida mesmo em ambientes de escuridão total',                category: 'Imagem',      color: 'cyan' },
+  ir_night:          { label: 'Visão Noturna IR',           description: 'Utiliza infravermelho para captura noturna sem luz visível',                   category: 'Imagem',      color: 'indigo' },
+  face_recognition:  { label: 'Reconhecimento Facial',      description: 'Identifica e compara rostos com banco de dados cadastrado (Deep Learning)',    category: 'Inteligência Artificial', color: 'purple' },
+  vehicle_detection: { label: 'Detecção de Veículos',       description: 'Detecta e classifica veículos: carro, moto, caminhão, cor e placa',            category: 'Detecção',    color: 'green' },
+  behavior_analysis: { label: 'Análise Comportamental',     description: 'Detecta comportamentos anômalos: aglomeração, objeto abandonado, queda',       category: 'Inteligência Artificial', color: 'pink' },
+  people_counting:   { label: 'Contagem de Pessoas',        description: 'Conta automaticamente pessoas entrando e saindo da área monitorada',           category: 'Inteligência Artificial', color: 'teal' },
+}
+
+const COLOR_CLASSES: Record<string, { bg: string; border: string; text: string; badge: string }> = {
+  yellow:  { bg: 'bg-yellow-500/10',  border: 'border-yellow-500/30',  text: 'text-yellow-400',  badge: 'bg-yellow-500/20 text-yellow-300' },
+  blue:    { bg: 'bg-blue-500/10',    border: 'border-blue-500/30',    text: 'text-blue-400',    badge: 'bg-blue-500/20 text-blue-300' },
+  red:     { bg: 'bg-red-500/10',     border: 'border-red-500/30',     text: 'text-red-400',     badge: 'bg-red-500/20 text-red-300' },
+  orange:  { bg: 'bg-orange-500/10',  border: 'border-orange-500/30',  text: 'text-orange-400',  badge: 'bg-orange-500/20 text-orange-300' },
+  cyan:    { bg: 'bg-cyan-500/10',    border: 'border-cyan-500/30',    text: 'text-cyan-400',    badge: 'bg-cyan-500/20 text-cyan-300' },
+  indigo:  { bg: 'bg-indigo-500/10',  border: 'border-indigo-500/30',  text: 'text-indigo-400',  badge: 'bg-indigo-500/20 text-indigo-300' },
+  purple:  { bg: 'bg-purple-500/10',  border: 'border-purple-500/30',  text: 'text-purple-400',  badge: 'bg-purple-500/20 text-purple-300' },
+  green:   { bg: 'bg-green-500/10',   border: 'border-green-500/30',   text: 'text-green-400',   badge: 'bg-green-500/20 text-green-300' },
+  pink:    { bg: 'bg-pink-500/10',    border: 'border-pink-500/30',    text: 'text-pink-400',    badge: 'bg-pink-500/20 text-pink-300' },
+  teal:    { bg: 'bg-teal-500/10',    border: 'border-teal-500/30',    text: 'text-teal-400',    badge: 'bg-teal-500/20 text-teal-300' },
+}
+
+function CameraAnalyticsModal({ camera, onClose }: { camera: any; onClose: () => void }) {
+  const [analytics, setAnalytics] = useState<any[]>([])
+  const [events, setEvents] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<'analytics' | 'events'>('analytics')
+  const [toggling, setToggling] = useState<string | null>(null)
+  const [sensitivity, setSensitivity] = useState<Record<number, number>>({})
+
+  const token = localStorage.getItem('token')
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+
+  useEffect(() => {
+    loadData()
+  }, [camera.id])
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      const [aRes, eRes] = await Promise.all([
+        fetch(`/api/analytics/camera/${camera.id}`, { headers }),
+        fetch(`/api/analytics/events?camera_id=${camera.id}&limit=20`, { headers })
+      ])
+      const aData = await aRes.json()
+      const eData = await eRes.json()
+      if (aData.analytics) {
+        setAnalytics(aData.analytics)
+        const sens: Record<number, number> = {}
+        aData.analytics.forEach((a: any) => { sens[a.id] = a.sensitivity })
+        setSensitivity(sens)
+      }
+      if (eData.events) setEvents(eData.events)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function toggleAnalytic(analytic: any) {
+    setToggling(analytic.analytic_type)
+    try {
+      await fetch(`/api/analytics/camera/${camera.id}/toggle`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ analytic_type: analytic.analytic_type, enabled: !analytic.enabled })
+      })
+      setAnalytics(prev => prev.map(a => a.id === analytic.id ? { ...a, enabled: !a.enabled } : a))
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setToggling(null)
+    }
+  }
+
+  async function updateSensitivity(analytic: any, value: number) {
+    setSensitivity(prev => ({ ...prev, [analytic.id]: value }))
+    try {
+      await fetch(`/api/analytics/${analytic.id}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ sensitivity: value })
+      })
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  async function acknowledgeEvent(eventId: number) {
+    try {
+      await fetch(`/api/analytics/events/${eventId}/acknowledge`, { method: 'PUT', headers })
+      setEvents(prev => prev.map(e => e.id === eventId ? { ...e, acknowledged: true } : e))
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const grouped = analytics.reduce((acc: Record<string, any[]>, a) => {
+    const meta = ANALYTIC_META[a.analytic_type]
+    const cat = meta?.category || 'Outros'
+    if (!acc[cat]) acc[cat] = []
+    acc[cat].push(a)
+    return acc
+  }, {})
+
+  const enabledCount = analytics.filter(a => a.enabled).length
+  const totalCount = analytics.length
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80" onClick={onClose}>
+      <div className="bg-gray-900 rounded-2xl w-full max-w-2xl border border-gray-700 flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-gray-700 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
+              <BarChart2 size={20} className="text-purple-400" />
+            </div>
+            <div>
+              <h2 className="text-white font-bold text-lg">Analíticos de Vídeo</h2>
+              <p className="text-gray-400 text-sm">{camera.name} — {camera.model}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-400 bg-gray-800 px-3 py-1 rounded-full border border-gray-700">
+              {enabledCount}/{totalCount} ativos
+            </span>
+            <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors p-1">
+              <X size={20} />
+            </button>
+          </div>
+        </div>
+        <div className="flex border-b border-gray-700 flex-shrink-0">
+          {[
+            { id: 'analytics', label: 'Configuração', count: totalCount },
+            { id: 'events',    label: 'Eventos',      count: events.length }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === tab.id
+                  ? 'border-purple-500 text-purple-400'
+                  : 'border-transparent text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              {tab.label}
+              <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeTab === tab.id ? 'bg-purple-500/20 text-purple-300' : 'bg-gray-700 text-gray-400'}`}>
+                {tab.count}
+              </span>
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : activeTab === 'analytics' ? (
+            <div className="space-y-5">
+              {Object.entries(grouped).map(([category, items]) => (
+                <div key={category}>
+                  <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-3">{category}</h3>
+                  <div className="space-y-2">
+                    {(items as any[]).map((analytic: any) => {
+                      const meta = ANALYTIC_META[analytic.analytic_type]
+                      const colors = COLOR_CLASSES[meta?.color || 'blue']
+                      const isToggling = toggling === analytic.analytic_type
+                      return (
+                        <div key={analytic.id} className={`rounded-xl border p-4 transition-all ${analytic.enabled ? `${colors.bg} ${colors.border}` : 'bg-gray-800/50 border-gray-700'}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className={`text-sm font-semibold ${analytic.enabled ? colors.text : 'text-gray-400'}`}>
+                                  {meta?.label || analytic.analytic_type}
+                                </span>
+                                {analytic.analytic_type === 'face_recognition' && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-purple-500/30 text-purple-300 border border-purple-500/30 font-medium">
+                                    Deep Learning
+                                  </span>
+                                )}
+                                {['behavior_analysis', 'people_counting', 'vehicle_detection'].includes(analytic.analytic_type) && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/20">
+                                    IA
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-gray-400 text-xs leading-relaxed">{meta?.description}</p>
+                              {analytic.enabled && !['ir_night', 'colorvu'].includes(analytic.analytic_type) && (
+                                <div className="mt-3">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-gray-500">Sensibilidade</span>
+                                    <span className={`text-xs font-medium ${colors.text}`}>{sensitivity[analytic.id] ?? analytic.sensitivity}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min="0"
+                                    max="100"
+                                    value={sensitivity[analytic.id] ?? analytic.sensitivity}
+                                    onChange={e => setSensitivity(prev => ({ ...prev, [analytic.id]: Number(e.target.value) }))}
+                                    onMouseUp={e => updateSensitivity(analytic, Number((e.target as HTMLInputElement).value))}
+                                    className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-gray-700"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => toggleAnalytic(analytic)}
+                              disabled={isToggling}
+                              className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${analytic.enabled ? 'bg-purple-500' : 'bg-gray-600'} ${isToggling ? 'opacity-50' : ''}`}
+                            >
+                              <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform ${analytic.enabled ? 'translate-x-5' : ''}`} />
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+              {analytics.length === 0 && (
+                <div className="text-center py-12 text-gray-500">
+                  <BarChart2 size={32} className="mx-auto mb-3 opacity-40" />
+                  <p className="text-sm">Nenhum analítico configurado para esta câmera</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {events.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <CheckCircle size={32} className="mx-auto mb-3 opacity-40" />
+                  <p className="text-sm">Nenhum evento registrado</p>
+                </div>
+              ) : events.map((event: any) => {
+                const meta = ANALYTIC_META[event.analytic_type]
+                const colors = COLOR_CLASSES[meta?.color || 'blue']
+                return (
+                  <div key={event.id} className={`rounded-xl border p-4 ${event.acknowledged ? 'bg-gray-800/30 border-gray-700/50 opacity-60' : `${colors.bg} ${colors.border}`}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={`text-sm font-semibold ${event.acknowledged ? 'text-gray-400' : colors.text}`}>
+                            {meta?.label || event.analytic_type}
+                          </span>
+                          {event.confidence && (
+                            <span className="text-xs text-gray-500">{event.confidence}% confiança</span>
+                          )}
+                        </div>
+                        {event.location && <p className="text-gray-400 text-xs">{event.location}</p>}
+                        <p className="text-gray-500 text-xs mt-1">
+                          {new Date(event.detected_at).toLocaleString('pt-BR')}
+                        </p>
+                      </div>
+                      {!event.acknowledged && (
+                        <button
+                          onClick={() => acknowledgeEvent(event.id)}
+                          className="text-xs px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors flex-shrink-0"
+                        >
+                          Confirmar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// ═══  FACIAL TAB  ═════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+interface FacialPerson {
+  id: number
+  name: string
+  role: string | null
+  department: string | null
+  photo_url: string | null
+  access_level: 'allowed' | 'blocked' | 'vip'
+  notes: string | null
+  created_at: string
+}
+interface FacialEvent {
+  id: number
+  event_type: 'recognized' | 'unknown' | 'blocked'
+  confidence: number | null
+  snapshot_url: string | null
+  face_crop_url: string | null
+  location: string | null
+  detected_at: string
+  person_name: string | null
+  person_role: string | null
+  access_level: string | null
+  camera_name: string | null
+}
+interface FacialStats {
+  total_persons: string
+  total_events: string
+  recognized: string
+  unknown_faces: string
+  blocked: string
+  last_24h: string
+}
+const ACCESS_LABELS: Record<string, { label: string; color: string }> = {
+  allowed: { label: 'Permitido', color: 'text-green-400 bg-green-500/10 border-green-500/30' },
+  blocked: { label: 'Bloqueado', color: 'text-red-400 bg-red-500/10 border-red-500/30' },
+  vip:     { label: 'VIP',       color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30' },
+}
+const EVENT_LABELS: Record<string, { label: string; color: string }> = {
+  recognized: { label: 'Reconhecido', color: 'text-green-400 bg-green-500/10 border-green-500/30' },
+  unknown:    { label: 'Desconhecido', color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30' },
+  blocked:    { label: 'Bloqueado',   color: 'text-red-400 bg-red-500/10 border-red-500/30' },
+}
+function FacialTab() {
+  const qc = useQueryClient()
+  const [subTab, setSubTab] = useState<'persons' | 'events' | 'hikvision' | 'extended'>('persons')
+  const [showModal, setShowModal] = useState(false)
+  const [editPerson, setEditPerson] = useState<FacialPerson | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [eventFilter, setEventFilter] = useState('all')
+  const [previewEvent, setPreviewEvent] = useState<FacialEvent | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [form, setForm] = useState({ name: '', role: '', department: '', access_level: 'allowed', notes: '' })
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [hikSync, setHikSync] = useState<Record<number, 'idle' | 'syncing' | 'done' | 'error'>>({})
+
+  const { data: statsData } = useQuery<FacialStats>({
+    queryKey: ['facial-stats'],
+    queryFn: () => api.get('/facial/stats').then(r => r.data),
+    refetchInterval: 30000,
+  })
+  const { data: personsData, isLoading: loadingPersons } = useQuery<{ persons: FacialPerson[] }>({
+    queryKey: ['facial-persons'],
+    queryFn: () => api.get('/facial/persons').then(r => r.data),
+  })
+  const { data: eventsData, isLoading: loadingEvents } = useQuery<{ events: FacialEvent[]; total: number }>({
+    queryKey: ['facial-events', eventFilter],
+    queryFn: () => api.get(`/facial/events?limit=100${eventFilter !== 'all' ? `&event_type=${eventFilter}` : ''}`).then(r => r.data),
+    enabled: subTab === 'events',
+  })
+  const { data: hikCamsData } = useQuery<any[]>({
+    queryKey: ['ip-cameras-hikvision'],
+    queryFn: () => api.get('/ip-cameras?manufacturer=hikvision').then(r => Array.isArray(r.data) ? r.data : (r.data.cameras || [])),
+    enabled: subTab === 'hikvision',
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/facial/persons/${id}`),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['facial-persons'] }); qc.invalidateQueries({ queryKey: ['facial-stats'] }) },
+  })
+  const deleteEventMutation = useMutation({
+    mutationFn: (id: number) => api.delete(`/facial/events/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['facial-events'] }),
+  })
+
+  const openCreate = () => {
+    setEditPerson(null)
+    setForm({ name: '', role: '', department: '', access_level: 'allowed', notes: '' })
+    setPhotoFile(null); setPhotoPreview(null); setFormError(''); setShowModal(true)
+  }
+  const openEdit = (p: FacialPerson) => {
+    setEditPerson(p)
+    setForm({ name: p.name, role: p.role || '', department: p.department || '', access_level: p.access_level, notes: p.notes || '' })
+    setPhotoFile(null); setPhotoPreview(p.photo_url || null); setFormError(''); setShowModal(true)
+  }
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return
+    setPhotoFile(file)
+    const reader = new FileReader()
+    reader.onload = ev => setPhotoPreview(ev.target?.result as string)
+    reader.readAsDataURL(file)
+  }
+  const handleSave = async () => {
+    if (!form.name.trim()) { setFormError('Nome é obrigatório'); return }
+    setSaving(true); setFormError('')
+    try {
+      const fd = new FormData()
+      fd.append('name', form.name); fd.append('role', form.role)
+      fd.append('department', form.department); fd.append('access_level', form.access_level)
+      fd.append('notes', form.notes)
+      if (photoFile) fd.append('photo', photoFile)
+      if (editPerson) {
+        await api.put(`/facial/persons/${editPerson.id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      } else {
+        await api.post('/facial/persons', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      }
+      qc.invalidateQueries({ queryKey: ['facial-persons'] }); qc.invalidateQueries({ queryKey: ['facial-stats'] })
+      setShowModal(false)
+    } catch (err: any) { setFormError(err.response?.data?.error || 'Erro ao salvar') }
+    finally { setSaving(false) }
+  }
+
+  const syncToHikvision = async (camId: number) => {
+    setHikSync(s => ({ ...s, [camId]: 'syncing' }))
+    try {
+      await api.post(`/facial/hikvision/sync/${camId}`)
+      setHikSync(s => ({ ...s, [camId]: 'done' }))
+      setTimeout(() => setHikSync(s => ({ ...s, [camId]: 'idle' })), 3000)
+    } catch {
+      setHikSync(s => ({ ...s, [camId]: 'error' }))
+      setTimeout(() => setHikSync(s => ({ ...s, [camId]: 'idle' })), 3000)
+    }
+  }
+
+  const filteredPersons = (personsData?.persons || []).filter(p =>
+    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (p.department || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (p.role || '').toLowerCase().includes(searchTerm.toLowerCase())
+  )
+  const stats = statsData
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/30 flex items-center justify-center">
+            <ScanFace className="w-5 h-5 text-purple-400" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-white">Reconhecimento Facial</h2>
+            <p className="text-sm text-gray-400">Banco de faces, eventos e integração com câmeras Hikvision</p>
+          </div>
+        </div>
+        <button onClick={openCreate}
+          className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors">
+          <Plus size={16} /> Cadastrar Pessoa
+        </button>
+      </div>
+
+      {/* Stats */}
+      {stats && (
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+          {[
+            { label: 'Pessoas', value: stats.total_persons, color: 'text-blue-400', bg: 'bg-blue-500/10 border-blue-500/20' },
+            { label: 'Eventos', value: stats.total_events, color: 'text-gray-300', bg: 'bg-gray-700/50 border-gray-600/50' },
+            { label: 'Reconhecidos', value: stats.recognized, color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/20' },
+            { label: 'Desconhecidos', value: stats.unknown_faces, color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/20' },
+            { label: 'Bloqueados', value: stats.blocked, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/20' },
+            { label: 'Últimas 24h', value: stats.last_24h, color: 'text-purple-400', bg: 'bg-purple-500/10 border-purple-500/20' },
+          ].map(s => (
+            <div key={s.label} className={`rounded-xl border p-3 ${s.bg}`}>
+              <p className="text-xs text-gray-400 mb-1">{s.label}</p>
+              <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Sub-tabs */}
+      <div className="flex gap-1 bg-gray-800/50 rounded-xl p-1 w-fit">
+        {[
+          { key: 'persons', label: 'Banco de Faces', icon: Users },
+          { key: 'events', label: 'Eventos', icon: Activity },
+          { key: 'hikvision', label: 'Integração Hikvision', icon: Settings },
+          { key: 'extended', label: 'Avançado', icon: BarChart2 },
+        ].map(t => (
+          <button key={t.key} onClick={() => setSubTab(t.key as any)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${subTab === t.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>
+            <t.icon size={15} />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Banco de Faces */}
+      {subTab === 'persons' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-sm">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                placeholder="Buscar por nome, cargo ou departamento..."
+                className="w-full pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+            </div>
+            <span className="text-sm text-gray-400">{filteredPersons.length} pessoa(s)</span>
+          </div>
+          {loadingPersons ? (
+            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 text-purple-500 animate-spin" /></div>
+          ) : filteredPersons.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-center">
+              <ScanFace size={40} className="text-gray-600 mb-3" />
+              <p className="text-gray-400 font-medium">Nenhuma pessoa cadastrada</p>
+              <p className="text-gray-500 text-sm mt-1">Clique em "Cadastrar Pessoa" para adicionar ao banco de faces</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredPersons.map(person => (
+                <div key={person.id} className="bg-gray-800/60 border border-gray-700/50 rounded-xl p-4 hover:border-purple-500/30 transition-all group">
+                  <div className="flex items-start gap-3">
+                    <div className="w-14 h-14 rounded-xl overflow-hidden bg-gray-700 flex-shrink-0 border border-gray-600">
+                      {person.photo_url ? (
+                        <img src={person.photo_url} alt={person.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center"><ScanFace size={24} className="text-gray-500" /></div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-semibold text-sm truncate">{person.name}</p>
+                      {person.role && <p className="text-gray-400 text-xs truncate">{person.role}</p>}
+                      {person.department && <p className="text-gray-500 text-xs truncate">{person.department}</p>}
+                      <span className={`inline-flex items-center gap-1 mt-2 px-2 py-0.5 rounded-full text-xs font-medium border ${ACCESS_LABELS[person.access_level]?.color || 'text-gray-400'}`}>
+                        {person.access_level === 'blocked' ? <ShieldOff size={10} /> : <Shield size={10} />}
+                        {ACCESS_LABELS[person.access_level]?.label || person.access_level}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700/50 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => openEdit(person)}
+                      className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-xs transition-colors">
+                      <Edit2 size={12} /> Editar
+                    </button>
+                    <button onClick={() => { if (confirm(`Remover ${person.name}?`)) deleteMutation.mutate(person.id) }}
+                      className="flex items-center justify-center gap-1 px-2 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg text-xs transition-colors border border-red-500/20">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Eventos */}
+      {subTab === 'events' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Filter size={15} className="text-gray-400" />
+              <span className="text-sm text-gray-400">Filtrar:</span>
+            </div>
+            {['all', 'recognized', 'unknown', 'blocked'].map(f => (
+              <button key={f} onClick={() => setEventFilter(f)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${eventFilter === f ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:text-white'}`}>
+                {f === 'all' ? 'Todos' : EVENT_LABELS[f]?.label || f}
+              </button>
+            ))}
+          </div>
+          {loadingEvents ? (
+            <div className="flex items-center justify-center h-40"><Loader2 className="w-8 h-8 text-purple-500 animate-spin" /></div>
+          ) : !eventsData?.events?.length ? (
+            <div className="flex flex-col items-center justify-center h-48 text-center">
+              <Activity size={40} className="text-gray-600 mb-3" />
+              <p className="text-gray-400 font-medium">Nenhum evento registrado</p>
+              <p className="text-gray-500 text-sm mt-1">Os eventos de reconhecimento facial aparecerão aqui</p>
+            </div>
+          ) : (
+            <div className="bg-gray-800/40 border border-gray-700/50 rounded-xl overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700/50 bg-gray-800/60">
+                    <th className="text-left px-4 py-3 text-gray-400 font-medium">Pessoa</th>
+                    <th className="text-left px-4 py-3 text-gray-400 font-medium">Evento</th>
+                    <th className="text-left px-4 py-3 text-gray-400 font-medium">Câmera</th>
+                    <th className="text-left px-4 py-3 text-gray-400 font-medium">Confiança</th>
+                    <th className="text-left px-4 py-3 text-gray-400 font-medium">Data/Hora</th>
+                    <th className="text-right px-4 py-3 text-gray-400 font-medium">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700/30">
+                  {eventsData.events.map(ev => (
+                    <tr key={ev.id} className="hover:bg-gray-700/20 transition-colors">
+                      <td className="px-4 py-3">
+                        <p className="text-white font-medium">{ev.person_name || 'Desconhecido'}</p>
+                        {ev.person_role && <p className="text-gray-500 text-xs">{ev.person_role}</p>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${EVENT_LABELS[ev.event_type]?.color || 'text-gray-400'}`}>
+                          {EVENT_LABELS[ev.event_type]?.label || ev.event_type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5 text-gray-300">
+                          <Camera size={13} className="text-gray-500" />
+                          <span className="text-xs">{ev.camera_name || '—'}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        {ev.confidence ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                              <div className="h-full bg-purple-500 rounded-full" style={{ width: `${ev.confidence}%` }} />
+                            </div>
+                            <span className="text-xs text-gray-400">{ev.confidence.toFixed(1)}%</span>
+                          </div>
+                        ) : <span className="text-gray-600 text-xs">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 text-xs">{new Date(ev.detected_at).toLocaleString('pt-BR')}</td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {(ev.snapshot_url || ev.face_crop_url) && (
+                            <button onClick={() => setPreviewEvent(ev)}
+                              className="p-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg transition-colors">
+                              <Eye size={13} />
+                            </button>
+                          )}
+                          <button onClick={() => { if (confirm('Remover evento?')) deleteEventMutation.mutate(ev.id) }}
+                            className="p-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-colors">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Integração Hikvision */}
+      {subTab === 'hikvision' && (
+        <div className="space-y-4">
+          <div className="bg-gray-800/40 border border-gray-700/50 rounded-xl p-5">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-9 h-9 rounded-lg bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center flex-shrink-0">
+                <Settings size={16} className="text-cyan-400" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold">Integração com Câmeras Hikvision</h3>
+                <p className="text-gray-400 text-sm mt-0.5">
+                  Sincronize o banco de faces com as câmeras Hikvision cadastradas. As câmeras com analítico de
+                  Reconhecimento Facial habilitado receberão automaticamente as fotos cadastradas e enviarão
+                  eventos de detecção para a plataforma via webhook.
+                </p>
+              </div>
+            </div>
+            <div className="bg-gray-900/60 border border-gray-700 rounded-lg p-4 mb-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Webhook de Eventos (configure na câmera)</p>
+              <code className="text-cyan-400 text-sm font-mono">
+                POST https://[IP_PLATAFORMA]/api/facial/hikvision/webhook
+              </code>
+              <p className="text-gray-500 text-xs mt-2">
+                Configure este endpoint nas câmeras Hikvision em: <strong className="text-gray-400">Configuração → Eventos → Detecção Facial → Vinculação HTTP</strong>
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+              {[
+                { label: 'Protocolo', value: 'ISAPI / HTTP POST', icon: '🔗' },
+                { label: 'Autenticação', value: 'Bearer Token (JWT)', icon: '🔐' },
+                { label: 'Formato', value: 'JSON + Imagem Base64', icon: '📦' },
+              ].map(item => (
+                <div key={item.label} className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                  <p className="text-xs text-gray-400">{item.label}</p>
+                  <p className="text-white text-sm font-medium mt-1">{item.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <h3 className="text-white font-semibold">Câmeras Hikvision Cadastradas</h3>
+          {!hikCamsData?.length ? (
+            <div className="flex flex-col items-center justify-center h-32 text-center bg-gray-800/30 rounded-xl border border-gray-700/50">
+              <Camera size={28} className="text-gray-600 mb-2" />
+              <p className="text-gray-400 text-sm">Nenhuma câmera Hikvision cadastrada</p>
+              <p className="text-gray-500 text-xs mt-1">Cadastre câmeras na aba "Fixas (IP)" com fabricante Hikvision</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {hikCamsData.map((cam: any) => {
+                const syncState = hikSync[cam.id] || 'idle'
+                const hasFacial = cam.analytics_types?.includes('face_recognition') || cam.analytics_types?.includes('face')
+                return (
+                  <div key={cam.id} className="bg-gray-800/60 border border-gray-700/50 rounded-xl p-4 flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${cam.active ? 'bg-green-400' : 'bg-gray-500'}`} />
+                      <div>
+                        <p className="text-white font-medium text-sm">{cam.name}</p>
+                        <p className="text-gray-400 text-xs">{cam.ip_address} · {cam.model || 'Hikvision'}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {hasFacial ? (
+                        <span className="flex items-center gap-1 px-2 py-1 bg-purple-500/10 border border-purple-500/20 text-purple-400 rounded-lg text-xs">
+                          <ScanFace size={12} /> Facial Ativo
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 px-2 py-1 bg-gray-700 border border-gray-600 text-gray-400 rounded-lg text-xs">
+                          Facial Inativo
+                        </span>
+                      )}
+                      <button
+                        onClick={() => syncToHikvision(cam.id)}
+                        disabled={syncState === 'syncing'}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          syncState === 'done' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                          syncState === 'error' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                          syncState === 'syncing' ? 'bg-gray-700 text-gray-400 cursor-not-allowed' :
+                          'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20'
+                        }`}
+                      >
+                        {syncState === 'syncing' ? <Loader2 size={12} className="animate-spin" /> :
+                         syncState === 'done' ? <CheckCircle size={12} /> :
+                         syncState === 'error' ? <XCircle size={12} /> :
+                         <Upload size={12} />}
+                        {syncState === 'syncing' ? 'Sincronizando...' :
+                         syncState === 'done' ? 'Sincronizado!' :
+                         syncState === 'error' ? 'Erro — Tentar novamente' :
+                         'Sincronizar Faces'}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {subTab === 'extended' && <FacialExtended />}
+
+      {/* Modal Cadastro/Edição */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+              <h2 className="text-lg font-bold text-white">{editPerson ? 'Editar Pessoa' : 'Cadastrar Pessoa'}</h2>
+              <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-white transition-colors"><X size={20} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-4">
+                <div className="w-20 h-20 rounded-xl overflow-hidden bg-gray-800 border border-gray-700 flex-shrink-0">
+                  {photoPreview ? (
+                    <img src={photoPreview} alt="preview" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center"><ScanFace size={28} className="text-gray-600" /></div>
+                  )}
+                </div>
+                <div>
+                  <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+                  <button onClick={() => fileRef.current?.click()}
+                    className="flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-colors border border-gray-700">
+                    <Upload size={14} />{photoPreview ? 'Trocar foto' : 'Adicionar foto'}
+                  </button>
+                  <p className="text-xs text-gray-500 mt-1">JPG, PNG até 5MB</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-400 mb-1">Nome *</label>
+                  <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Nome completo"
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Cargo</label>
+                  <input value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+                    placeholder="Ex: Funcionário"
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Departamento</label>
+                  <input value={form.department} onChange={e => setForm(f => ({ ...f, department: e.target.value }))}
+                    placeholder="Ex: TI"
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-400 mb-1">Nível de Acesso</label>
+                  <select value={form.access_level} onChange={e => setForm(f => ({ ...f, access_level: e.target.value }))}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white focus:outline-none focus:border-purple-500">
+                    <option value="allowed">Permitido</option>
+                    <option value="vip">VIP</option>
+                    <option value="blocked">Bloqueado</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs text-gray-400 mb-1">Observações</label>
+                  <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                    placeholder="Observações opcionais..." rows={2}
+                    className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none" />
+                </div>
+              </div>
+              {formError && <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">{formError}</p>}
+            </div>
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-700">
+              <button onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Cancelar</button>
+              <button onClick={handleSave} disabled={saving}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors">
+                {saving ? 'Salvando...' : editPerson ? 'Salvar Alterações' : 'Cadastrar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Preview Evento */}
+      {previewEvent && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
+              <h2 className="text-lg font-bold text-white">Snapshot do Evento</h2>
+              <button onClick={() => setPreviewEvent(null)} className="text-gray-400 hover:text-white transition-colors"><X size={20} /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              {previewEvent.snapshot_url && (
+                <div>
+                  <p className="text-xs text-gray-400 mb-2">Snapshot da Câmera</p>
+                  <img src={previewEvent.snapshot_url} alt="snapshot" className="w-full rounded-xl border border-gray-700" />
+                </div>
+              )}
+              {previewEvent.face_crop_url && (
+                <div>
+                  <p className="text-xs text-gray-400 mb-2">Recorte do Rosto</p>
+                  <img src={previewEvent.face_crop_url} alt="face" className="w-32 rounded-xl border border-gray-700" />
+                </div>
+              )}
+              <div className="bg-gray-800 rounded-xl p-3 space-y-1.5">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Pessoa:</span>
+                  <span className="text-white">{previewEvent.person_name || 'Desconhecido'}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Tipo:</span>
+                  <span className={EVENT_LABELS[previewEvent.event_type]?.color?.split(' ')[0] || 'text-gray-300'}>
+                    {EVENT_LABELS[previewEvent.event_type]?.label || previewEvent.event_type}
+                  </span>
+                </div>
+                {previewEvent.confidence && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-400">Confiança:</span>
+                    <span className="text-white">{previewEvent.confidence.toFixed(1)}%</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Data/Hora:</span>
+                  <span className="text-white">{new Date(previewEvent.detected_at).toLocaleString('pt-BR')}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Cameras() {
-  const [tab, setTab] = useState<'jimi' | 'ip' | 'events'>('jimi')
+  const [tab, setTab] = useState<'jimi' | 'ip' | 'events' | 'facial' | 'employees'>('jimi')
 
   return (
     <div className="space-y-6">
@@ -153,11 +1011,33 @@ export default function Cameras() {
         >
           <span className="flex items-center gap-2"><AlertTriangle size={16} /> Eventos</span>
         </button>
+        <button
+          onClick={() => setTab('facial')}
+          className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+            tab === 'facial'
+              ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+              : 'bg-gray-800 text-gray-400 border border-gray-700 hover:border-gray-600'
+          }`}
+        >
+          <span className="flex items-center gap-2"><ScanFace size={16} /> Reconhecimento Facial</span>
+        </button>
+        <button
+          onClick={() => setTab("employees")}
+          className={`flex items-center px-5 py-3.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+            tab === "employees"
+              ? "border-indigo-500 text-indigo-400"
+              : "border-transparent text-gray-400 hover:text-gray-200"
+          }`}
+        >
+          <span className="flex items-center gap-2"><Users size={16} /> Funcionários & Alertas</span>
+        </button>
       </div>
 
       {tab === 'jimi' && <JimiTab />}
       {tab === 'ip' && <IpTab />}
       {tab === 'events' && <EventsTab />}
+      {tab === 'facial' && <FacialTab />}
+      {tab === 'employees' && <EmployeesAlertsTab />}
     </div>
   )
 }
@@ -187,7 +1067,17 @@ function JimiTab() {
 
   // Queries
   const { data: rawCameras, isLoading } = useQuery({ queryKey: ['cameras', statusFilter, searchQ], queryFn: () => camerasApi.list({ status: statusFilter || undefined, search: searchQ || undefined }).then(r => r.data) })
-  const cameras = Array.isArray(rawCameras) ? rawCameras : []
+  // Ordenar: online primeiro, offline por último
+  const cameras = useMemo(() => {
+    const list = [...(rawCameras || [])];
+    const statusOrder: Record<string, number> = { online: 0, active: 0, unknown: 1, offline: 2, inactive: 2 };
+    return list.sort((a: any, b: any) => {
+      const aOrd = statusOrder[(a.status || '').toLowerCase()] ?? 1;
+      const bOrd = statusOrder[(b.status || '').toLowerCase()] ?? 1;
+      if (aOrd !== bOrd) return aOrd - bOrd;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [rawCameras]);
   const { data: stats } = useQuery({ queryKey: ['camera-stats'], queryFn: () => camerasApi.stats().then(r => r.data) })
   const { data: rawVehicles } = useQuery({ queryKey: ['devices-for-cameras'], queryFn: () => devicesApi.list().then(r => r.data) })
   const vehicles = Array.isArray(rawVehicles) ? rawVehicles : (rawVehicles as any)?.devices || []
@@ -664,6 +1554,8 @@ function IpTab() {
   const [editingIp, setEditingIp] = useState<any>(null)
   const [form, setForm] = useState<IpCameraForm>(EMPTY_IP_FORM)
   const [showLive, setShowLive] = useState<any>(null)
+  const [showConfig, setShowConfig] = useState<any>(null)
+  const [showAnalytics, setShowAnalytics] = useState<any>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null)
   const [testResult, setTestResult] = useState<{ id: number; status: 'loading' | 'ok' | 'error'; msg?: string } | null>(null)
   const [snapshotBust, setSnapshotBust] = useState(0)
@@ -681,7 +1573,21 @@ function IpTab() {
     queryKey: ['ip-cameras'],
     queryFn: () => ipCamerasApi.list().then(r => r.data),
   })
-  const ipCameras = Array.isArray(rawIpCameras) ? rawIpCameras : []
+  const ipCameras = useMemo(() => {
+    const list = Array.isArray(rawIpCameras) ? [...rawIpCameras] : [];
+    function camOrder(c: any): number {
+      // online=true means camera has valid IP (potentially reachable) → comes first
+      if (c.online === true) return 0;
+      if (c.active) return 1;
+      return 2;
+    }
+    return list.sort((a: any, b: any) => {
+      const aO = camOrder(a);
+      const bO = camOrder(b);
+      if (aO !== bO) return aO - bO;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [rawIpCameras])
   const isLoading = rawIpCameras === undefined
 
   // Mutations
@@ -886,6 +1792,12 @@ function IpTab() {
                   <button onClick={() => handleTestConnection(cam.id)} className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20 rounded-lg text-xs font-medium transition-all">
                     <Wifi size={12} /> Testar
                   </button>
+                  <button onClick={() => setShowConfig(cam)} title="Especificações técnicas" className="flex items-center justify-center gap-1.5 py-2 px-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg text-xs font-medium transition-all">
+                    <Info size={12} />
+                  </button>
+                  <button onClick={() => setShowAnalytics(cam)} title="Analíticos de vídeo" className="flex items-center justify-center gap-1.5 py-2 px-3 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 rounded-lg text-xs font-medium transition-all">
+                    <BarChart2 size={12} />
+                  </button>
                   {canEdit && (
                     <button onClick={() => openEdit(cam)} className="flex items-center justify-center gap-1.5 py-2 px-3 bg-gray-700/50 hover:bg-gray-700 text-gray-300 border border-gray-600 rounded-lg text-xs font-medium transition-all">
                       <Edit2 size={12} />
@@ -951,6 +1863,12 @@ function IpTab() {
       {/* ══ Live View Modal (HLS) ══ */}
       {showLive && (
         <IpLiveModal camera={showLive} onClose={() => setShowLive(null)} />
+      )}
+      {showConfig && (
+        <CameraConfigModal camera={showConfig} onClose={() => setShowConfig(null)} />
+      )}
+      {showAnalytics && (
+        <CameraAnalyticsModal camera={showAnalytics} onClose={() => setShowAnalytics(null)} />
       )}
     </div>
   )
@@ -1333,100 +2251,112 @@ function IpLiveModal({ camera, onClose }: { camera: any; onClose: () => void }) 
     let cancelled = false
     async function startStream() {
       try {
+        // First try Shinobi stream-info
         let info: any = null
         try {
           const { data } = await ipCamerasApi.streamInfo(camera.id)
           info = data
-        } catch (err: any) {
-          if (err.response?.status === 409) {
-            if (cancelled) return
-            setStatus('syncing')
-            try {
-              await ipCamerasApi.testConnection(camera.id)
-              const { data } = await ipCamerasApi.streamInfo(camera.id)
-              info = data
-            } catch (syncErr: any) {
-              if (!cancelled) {
-                setStatus('error')
-                setErrorMsg('Câmera não sincronizada com o servidor de stream. Clique em "Testar" no card da câmera e aguarde 15s.')
-              }
-              return
-            }
-          } else {
-            throw err
-          }
+        } catch (e: any) {
+          // Shinobi not available, fall through to direct proxy
+          console.log('[IpLiveModal] Shinobi not available, trying direct proxy')
         }
-        if (cancelled || !info) return
-
-        const token = localStorage.getItem('iot_token') || ''
-
-        // Try HLS first
-        if (info.hls) {
-          const hlsUrl = info.hls + (info.hls.includes('?') ? '&' : '?') + 'token=' + token
+        if (cancelled) return
+        
+        if (info?.hls_url) {
+          // Try HLS via Shinobi
+          setStatus('syncing')
           const Hls = (await import('hls.js')).default
           if (Hls.isSupported() && videoRef.current) {
-            const hls = new Hls({
-              enableWorker: false,
-              lowLatencyMode: true,
-              backBufferLength: 10,
-              xhrSetup: (xhr: any) => {
-                xhr.setRequestHeader('Authorization', 'Bearer ' + token)
-              }
-            })
+            const hls = new Hls({ enableWorker: false, lowLatencyMode: true })
             hlsRef.current = hls
-            hls.loadSource(hlsUrl)
+            hls.loadSource(info.hls_url)
             hls.attachMedia(videoRef.current)
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
-              if (!cancelled) {
-                videoRef.current?.play().catch(() => {})
-                setStreamMode('hls')
-                setStatus('playing')
-              }
+              if (!cancelled) { setStreamMode('hls'); setStatus('playing'); videoRef.current?.play().catch(() => {}) }
             })
-            hls.on(Hls.Events.ERROR, (_: any, data: any) => {
-              if (data.fatal && !cancelled) {
-                hls.destroy()
-                if (info.mjpeg) {
-                  setMjpegUrl(info.mjpeg + (info.mjpeg.includes('?') ? '&' : '?') + 'token=' + token)
-                  setStreamMode('mjpeg')
-                  setStatus('playing')
-                } else {
-                  setStatus('error')
-                  setErrorMsg('HLS indisponível. Verifique se o Shinobi está processando o stream.')
-                }
-              }
+            hls.on(Hls.Events.ERROR, (_: any, d: any) => {
+              if (d.fatal) { hls.destroy(); tryDirectMjpeg() }
             })
-            return
-          } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
-            videoRef.current.src = hlsUrl
-            videoRef.current.play().catch(() => {})
-            setStreamMode('hls')
-            setStatus('playing')
             return
           }
         }
-
-        // Fallback: MJPEG
-        if (info.mjpeg) {
-          setMjpegUrl(info.mjpeg + (info.mjpeg.includes('?') ? '&' : '?') + 'token=' + token)
-          setStreamMode('mjpeg')
-          setStatus('playing')
+        
+        // Direct MJPEG proxy (no Shinobi needed)
+        await tryDirectMjpeg()
+        
+      } catch (err: any) {
+        if (!cancelled) { setStatus('error'); setErrorMsg(err?.message || 'Erro ao conectar') }
+      }
+    }
+    
+    async function tryDirectMjpeg() {
+      if (cancelled) return
+      setStatus('loading')
+      // Use the snapshot endpoint with polling (fetches JPEG frames at ~1fps)
+      // The /snapshot endpoint uses Digest Auth and works with Hikvision cameras
+      const token = localStorage.getItem('iot_token') || sessionStorage.getItem('iot_token') || ''
+      const getFrameUrl = (t: number) => `/api/ip-cameras/${camera.id}/snapshot?t=${t}&token=${encodeURIComponent(token)}&_b=${t}`
+      
+      // Test first frame
+      try {
+        const testUrl = getFrameUrl(Date.now())
+        const testRes = await fetch(testUrl)
+        if (!testRes.ok) {
+          if (!cancelled) {
+            setStatus('error')
+            setErrorMsg(`Câmera não acessível (HTTP ${testRes.status}). Verifique as credenciais e conectividade.`)
+          }
           return
         }
-
-        setStatus('error')
-        setErrorMsg('Nenhum stream disponível para esta câmera.')
-      } catch (err: any) {
+        const blob = await testRes.blob()
+        if (blob.size < 100) {
+          if (!cancelled) {
+            setStatus('error')
+            setErrorMsg('Câmera não retornou imagem válida.')
+          }
+          return
+        }
+        const objectUrl = URL.createObjectURL(blob)
+        if (!cancelled) {
+          setMjpegUrl(objectUrl)
+          setStreamMode('mjpeg')
+          setStatus('playing')
+        }
+        // Poll for new frames every 800ms
+        const intervalId = setInterval(async () => {
+          if (cancelled) { clearInterval(intervalId); return }
+          try {
+            const res = await fetch(getFrameUrl(Date.now()))
+            if (res.ok) {
+              const newBlob = await res.blob()
+              if (newBlob.size > 100) {
+                const newUrl = URL.createObjectURL(newBlob)
+                if (!cancelled) {
+                  setMjpegUrl(prev => {
+                    if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev)
+                    return newUrl
+                  })
+                }
+              }
+            }
+          } catch { /* ignore individual frame errors */ }
+        }, 800)
+        ;(window as any)[`liveFrameInterval_${camera.id}`] = intervalId
+      } catch (e: any) {
         if (!cancelled) {
           setStatus('error')
-          setErrorMsg(err.response?.data?.error || err.message || 'Falha ao obter informações do stream.')
+          setErrorMsg(`Erro ao conectar à câmera: ${e.message}`)
         }
       }
     }
+    
     startStream()
     return () => {
       cancelled = true
-      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null }
+      hlsRef.current?.destroy()
+      // Clear live-frame polling interval
+      const intervalId = (window as any)[`liveFrameInterval_${camera.id}`]
+      if (intervalId) { clearInterval(intervalId); delete (window as any)[`liveFrameInterval_${camera.id}`] }
     }
   }, [camera.id])
 
@@ -1475,7 +2405,7 @@ function IpLiveModal({ camera, onClose }: { camera: any; onClose: () => void }) 
               alt={camera.name}
               className="w-full h-full object-contain"
               onLoad={() => setStatus('playing')}
-              onError={() => { setStatus('error'); setErrorMsg('Stream MJPEG desconectado') }}
+              onError={() => { /* ignore individual frame errors */ }}
             />
           )}
           {(status === 'loading' || status === 'syncing') && (
@@ -1507,7 +2437,7 @@ function IpLiveModal({ camera, onClose }: { camera: any; onClose: () => void }) 
         {status === 'playing' && (
           <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
             <span>{(camera.manufacturer || 'generic').toUpperCase()} · {camera.ip_address}:{camera.rtsp_port || 554}</span>
-            <span>{streamMode === 'hls' ? 'Baixa latência via HLS' : 'Stream MJPEG'}</span>
+            <span>{streamMode === 'hls' ? 'Baixa latência via HLS' : 'Snapshots ao vivo (1fps)'}</span>
           </div>
         )}
       </div>
@@ -1528,6 +2458,494 @@ function InfoItem({ label, value }: { label: string; value: string }) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// ═══  EMPLOYEES & ALERTS TAB  ═════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+function EmployeesAlertsTab() {
+  const [subTab, setSubTab] = useState<'employees' | 'alerts' | 'reports'>('employees')
+  const [employees, setEmployees] = useState<any[]>([])
+  const [alerts, setAlerts] = useState<any[]>([])
+  const [reports, setReports] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedEmployee, setSelectedEmployee] = useState<any>(null)
+  const [employeeHistory, setEmployeeHistory] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [showAddEmployee, setShowAddEmployee] = useState(false)
+  const [showAddAlert, setShowAddAlert] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
+  const [reportFilter, setReportFilter] = useState({ employeeId: '', startDate: '', endDate: '' })
+
+  // Form states
+  const [empForm, setEmpForm] = useState({ name: '', department: '', role: '', employee_code: '', photo: null as File | null })
+  const [alertForm, setAlertForm] = useState({ name: '', description: '', alert_level: 'high', photo: null as File | null })
+  const [saving, setSaving] = useState(false)
+
+  const token = localStorage.getItem('iot_token') || ''
+  const headers = { 'Authorization': `Bearer ${token}` }
+
+  useEffect(() => { loadData() }, [subTab])
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      if (subTab === 'employees') {
+        const r = await fetch('/api/employees-alerts/employees', { headers })
+        const d = await r.json()
+        setEmployees(Array.isArray(d) ? d : [])
+      } else if (subTab === 'alerts') {
+        const r = await fetch('/api/employees-alerts/alerts', { headers })
+        const d = await r.json()
+        setAlerts(Array.isArray(d) ? d : [])
+      } else if (subTab === 'reports') {
+        const params = new URLSearchParams()
+        if (reportFilter.employeeId) params.set('employee_id', reportFilter.employeeId)
+        if (reportFilter.startDate) params.set('start_date', reportFilter.startDate)
+        if (reportFilter.endDate) params.set('end_date', reportFilter.endDate)
+        const r = await fetch(`/api/employees-alerts/reports?${params}`, { headers })
+        const d = await r.json()
+        setReports(Array.isArray(d) ? d : [])
+      }
+    } catch (e) { console.error(e) }
+    finally { setLoading(false) }
+  }
+
+  async function loadEmployeeHistory(emp: any) {
+    setSelectedEmployee(emp)
+    setHistoryLoading(true)
+    try {
+      const r = await fetch(`/api/employees-alerts/employees/${emp.id}/history`, { headers })
+      const d = await r.json()
+      setEmployeeHistory(Array.isArray(d) ? d : [])
+    } catch (e) { console.error(e) }
+    finally { setHistoryLoading(false) }
+  }
+
+  async function saveEmployee() {
+    if (!empForm.name.trim()) return
+    setSaving(true)
+    try {
+      const fd = new FormData()
+      fd.append('name', empForm.name)
+      fd.append('department', empForm.department)
+      fd.append('role', empForm.role)
+      fd.append('employee_code', empForm.employee_code)
+      if (empForm.photo) fd.append('photo', empForm.photo)
+      await fetch('/api/employees-alerts/employees', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: fd
+      })
+      setShowAddEmployee(false)
+      setEmpForm({ name: '', department: '', role: '', employee_code: '', photo: null })
+      loadData()
+    } catch (e) { console.error(e) }
+    finally { setSaving(false) }
+  }
+
+  async function saveAlert() {
+    if (!alertForm.name.trim() || !alertForm.photo) return
+    setSaving(true)
+    try {
+      const fd = new FormData()
+      fd.append('name', alertForm.name)
+      fd.append('description', alertForm.description)
+      fd.append('alert_level', alertForm.alert_level)
+      fd.append('photo', alertForm.photo)
+      await fetch('/api/employees-alerts/alerts', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: fd
+      })
+      setShowAddAlert(false)
+      setAlertForm({ name: '', description: '', alert_level: 'high', photo: null })
+      loadData()
+    } catch (e) { console.error(e) }
+    finally { setSaving(false) }
+  }
+
+  async function deleteEmployee(id: number) {
+    if (!confirm('Remover este funcionário?')) return
+    await fetch(`/api/employees-alerts/employees/${id}`, { method: 'DELETE', headers })
+    loadData()
+  }
+
+  async function deleteAlert(id: number) {
+    if (!confirm('Remover este alerta?')) return
+    await fetch(`/api/employees-alerts/alerts/${id}`, { method: 'DELETE', headers })
+    loadData()
+  }
+
+  const filteredEmployees = employees.filter(e =>
+    !searchQ || e.name?.toLowerCase().includes(searchQ.toLowerCase()) ||
+    e.department?.toLowerCase().includes(searchQ.toLowerCase())
+  )
+
+  const ALERT_LEVEL_COLORS: Record<string, string> = {
+    critical: 'bg-red-500/20 text-red-300 border-red-500/30',
+    high: 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+    medium: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+    low: 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+            <Users size={22} className="text-indigo-400" /> Funcionários & Alertas Faciais
+          </h2>
+          <p className="text-gray-400 text-sm mt-0.5">Gestão de funcionários, alertas e relatórios de localização facial</p>
+        </div>
+        <div className="flex gap-2">
+          {subTab === 'employees' && (
+            <button onClick={() => setShowAddEmployee(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-all">
+              <Plus size={16} /> Cadastrar Funcionário
+            </button>
+          )}
+          {subTab === 'alerts' && (
+            <button onClick={() => setShowAddAlert(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-medium transition-all">
+              <Plus size={16} /> Cadastrar Alerta
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="flex gap-1 bg-gray-800/50 rounded-xl p-1 w-fit">
+        {[
+          { id: 'employees', label: 'Funcionários', icon: <Users size={14} />, count: employees.length },
+          { id: 'alerts', label: 'Alertas Faciais', icon: <ShieldOff size={14} />, count: alerts.length },
+          { id: 'reports', label: 'Relatórios de Localização', icon: <Activity size={14} /> },
+        ].map(t => (
+          <button key={t.id} onClick={() => { setSubTab(t.id as any); setSelectedEmployee(null) }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+              subTab === t.id ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-300'
+            }`}>
+            {t.icon} {t.label}
+            {t.count !== undefined && <span className={`text-xs px-1.5 py-0.5 rounded-full ${subTab === t.id ? 'bg-indigo-500/30 text-indigo-300' : 'bg-gray-700 text-gray-400'}`}>{t.count}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* EMPLOYEES TAB */}
+      {subTab === 'employees' && (
+        <div>
+          {/* Search */}
+          <div className="flex gap-3 mb-4">
+            <div className="relative flex-1 max-w-sm">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
+                placeholder="Buscar por nome ou setor..."
+                className="w-full pl-9 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500" />
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-16"><div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredEmployees.map(emp => (
+                <div key={emp.id} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4 hover:border-indigo-500/30 transition-all">
+                  <div className="flex items-start gap-3">
+                    {emp.photo_url ? (
+                      <img src={emp.photo_url} alt={emp.name}
+                        className="w-14 h-14 rounded-xl object-cover border border-gray-600 flex-shrink-0" />
+                    ) : (
+                      <div className="w-14 h-14 rounded-xl bg-gray-700 flex items-center justify-center flex-shrink-0">
+                        <Users size={24} className="text-gray-500" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-medium text-sm truncate">{emp.name}</p>
+                      {emp.department && <p className="text-gray-400 text-xs mt-0.5">{emp.department}</p>}
+                      {emp.role && <p className="text-gray-500 text-xs">{emp.role}</p>}
+                      {emp.employee_code && <p className="text-gray-600 text-xs font-mono">#{emp.employee_code}</p>}
+                      {emp.last_seen_at && (
+                        <p className="text-green-400 text-xs mt-1 flex items-center gap-1">
+                          <Activity size={10} /> Visto: {new Date(emp.last_seen_at).toLocaleString('pt-BR')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <button onClick={() => loadEmployeeHistory(emp)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 rounded-lg text-xs font-medium transition-all border border-indigo-500/20">
+                      <Activity size={12} /> Ver Histórico
+                    </button>
+                    <button onClick={() => deleteEmployee(emp.id)}
+                      className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all border border-red-500/20">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {filteredEmployees.length === 0 && (
+                <div className="col-span-3 text-center py-16 text-gray-500">
+                  <Users size={40} className="mx-auto mb-3 opacity-30" />
+                  <p>Nenhum funcionário encontrado</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Employee History Modal */}
+          {selectedEmployee && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setSelectedEmployee(null)}>
+              <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between p-5 border-b border-gray-700">
+                  <div className="flex items-center gap-3">
+                    {selectedEmployee.photo_url ? (
+                      <img src={selectedEmployee.photo_url} alt={selectedEmployee.name} className="w-12 h-12 rounded-xl object-cover border border-gray-600" />
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl bg-gray-700 flex items-center justify-center"><Users size={20} className="text-gray-400" /></div>
+                    )}
+                    <div>
+                      <h3 className="text-white font-bold">{selectedEmployee.name}</h3>
+                      <p className="text-gray-400 text-sm">{selectedEmployee.department || 'Sem setor'}</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setSelectedEmployee(null)} className="p-2 hover:bg-gray-800 rounded-xl text-gray-400 hover:text-white transition-all">
+                    <X size={18} />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-5">
+                  <h4 className="text-gray-300 font-medium mb-3 flex items-center gap-2">
+                    <Activity size={16} className="text-indigo-400" /> Histórico de Reconhecimentos
+                  </h4>
+                  {historyLoading ? (
+                    <div className="flex items-center justify-center py-10"><div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>
+                  ) : employeeHistory.length === 0 ? (
+                    <div className="text-center py-10 text-gray-500">
+                      <Activity size={32} className="mx-auto mb-2 opacity-30" />
+                      <p>Nenhum reconhecimento registrado</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {employeeHistory.map((rec: any, i: number) => (
+                        <div key={i} className="flex items-center gap-3 p-3 bg-gray-800/50 border border-gray-700/30 rounded-xl">
+                          <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center flex-shrink-0">
+                            <ScanFace size={16} className="text-indigo-400" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white text-sm font-medium">{rec.camera_name || 'Câmera desconhecida'}</p>
+                            <p className="text-gray-400 text-xs">{rec.location_desc || rec.camera_ip || ''}</p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-gray-300 text-xs font-medium">{new Date(rec.recognized_at).toLocaleDateString('pt-BR')}</p>
+                            <p className="text-gray-500 text-xs">{new Date(rec.recognized_at).toLocaleTimeString('pt-BR')}</p>
+                          </div>
+                          {rec.confidence && (
+                            <div className="flex-shrink-0">
+                              <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-300 rounded-full border border-green-500/20">
+                                {Math.round(rec.confidence * 100)}%
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ALERTS TAB */}
+      {subTab === 'alerts' && (
+        <div>
+          {loading ? (
+            <div className="flex items-center justify-center py-16"><div className="w-8 h-8 border-2 border-red-500 border-t-transparent rounded-full animate-spin" /></div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {alerts.map(alert => (
+                <div key={alert.id} className="bg-gray-800/50 border border-red-500/20 rounded-xl p-4 hover:border-red-500/40 transition-all">
+                  <div className="flex items-start gap-3">
+                    {alert.photo_url ? (
+                      <img src={alert.photo_url} alt={alert.name}
+                        className="w-16 h-16 rounded-xl object-cover border border-red-500/30 flex-shrink-0" />
+                    ) : (
+                      <div className="w-16 h-16 rounded-xl bg-red-500/10 flex items-center justify-center flex-shrink-0 border border-red-500/20">
+                        <ShieldOff size={28} className="text-red-400" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-medium text-sm">{alert.name}</p>
+                      {alert.description && <p className="text-gray-400 text-xs mt-0.5 line-clamp-2">{alert.description}</p>}
+                      <span className={`inline-block mt-1.5 text-xs px-2 py-0.5 rounded-full border ${ALERT_LEVEL_COLORS[alert.alert_level] || ALERT_LEVEL_COLORS.high}`}>
+                        {alert.alert_level === 'critical' ? '🔴 Crítico' : alert.alert_level === 'high' ? '🟠 Alto' : alert.alert_level === 'medium' ? '🟡 Médio' : '🔵 Baixo'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 mt-3">
+                    <div className="flex-1 text-xs text-gray-500 flex items-center gap-1">
+                      <Activity size={10} /> {alert.trigger_count || 0} acionamentos
+                    </div>
+                    <button onClick={() => deleteAlert(alert.id)}
+                      className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition-all border border-red-500/20">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {alerts.length === 0 && (
+                <div className="col-span-3 text-center py-16 text-gray-500">
+                  <ShieldOff size={40} className="mx-auto mb-3 opacity-30" />
+                  <p>Nenhum alerta cadastrado</p>
+                  <p className="text-xs mt-1">Cadastre imagens de pessoas para monitoramento de alertas</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* REPORTS TAB */}
+      {subTab === 'reports' && (
+        <div>
+          {/* Filters */}
+          <div className="flex flex-wrap gap-3 mb-4 p-4 bg-gray-800/30 border border-gray-700/30 rounded-xl">
+            <select value={reportFilter.employeeId}
+              onChange={e => setReportFilter(f => ({ ...f, employeeId: e.target.value }))}
+              className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500">
+              <option value="">Todos os funcionários</option>
+              {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+            </select>
+            <input type="date" value={reportFilter.startDate}
+              onChange={e => setReportFilter(f => ({ ...f, startDate: e.target.value }))}
+              className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
+            <input type="date" value={reportFilter.endDate}
+              onChange={e => setReportFilter(f => ({ ...f, endDate: e.target.value }))}
+              className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-indigo-500" />
+            <button onClick={loadData}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-all">
+              <Filter size={14} /> Filtrar
+            </button>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center py-16"><div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" /></div>
+          ) : (
+            <div className="space-y-2">
+              {reports.length === 0 ? (
+                <div className="text-center py-16 text-gray-500">
+                  <Activity size={40} className="mx-auto mb-3 opacity-30" />
+                  <p>Nenhum reconhecimento registrado</p>
+                  <p className="text-xs mt-1">Os reconhecimentos faciais aparecerão aqui quando detectados pelas câmeras</p>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-5 gap-3 px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    <span>Funcionário</span>
+                    <span>Câmera</span>
+                    <span>Localização</span>
+                    <span>Data</span>
+                    <span>Hora</span>
+                  </div>
+                  {reports.map((rec: any, i: number) => (
+                    <div key={i} className="grid grid-cols-5 gap-3 items-center p-3 bg-gray-800/40 border border-gray-700/30 rounded-xl hover:border-indigo-500/20 transition-all">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {rec.employee_photo ? (
+                          <img src={rec.employee_photo} alt={rec.employee_name} className="w-8 h-8 rounded-lg object-cover border border-gray-600 flex-shrink-0" />
+                        ) : (
+                          <div className="w-8 h-8 rounded-lg bg-gray-700 flex items-center justify-center flex-shrink-0">
+                            <Users size={14} className="text-gray-500" />
+                          </div>
+                        )}
+                        <span className="text-white text-sm truncate">{rec.employee_name || 'Desconhecido'}</span>
+                      </div>
+                      <span className="text-gray-300 text-sm truncate">{rec.camera_name || '—'}</span>
+                      <span className="text-gray-400 text-xs truncate">{rec.location_desc || rec.camera_ip || '—'}</span>
+                      <span className="text-gray-300 text-sm">{new Date(rec.recognized_at).toLocaleDateString('pt-BR')}</span>
+                      <span className="text-indigo-300 text-sm font-mono">{new Date(rec.recognized_at).toLocaleTimeString('pt-BR')}</span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ADD EMPLOYEE MODAL */}
+      {showAddEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setShowAddEmployee(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-700">
+              <h3 className="text-white font-bold flex items-center gap-2"><Users size={18} className="text-indigo-400" /> Cadastrar Funcionário</h3>
+              <button onClick={() => setShowAddEmployee(false)} className="p-1.5 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <input value={empForm.name} onChange={e => setEmpForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="Nome completo *" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500" />
+              <input value={empForm.department} onChange={e => setEmpForm(f => ({ ...f, department: e.target.value }))}
+                placeholder="Setor / Departamento" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500" />
+              <input value={empForm.role} onChange={e => setEmpForm(f => ({ ...f, role: e.target.value }))}
+                placeholder="Cargo / Função" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500" />
+              <input value={empForm.employee_code} onChange={e => setEmpForm(f => ({ ...f, employee_code: e.target.value }))}
+                placeholder="Código do funcionário" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-indigo-500" />
+              <div>
+                <label className="block text-gray-400 text-xs mb-1.5">Foto do funcionário</label>
+                <input type="file" accept="image/*" onChange={e => setEmpForm(f => ({ ...f, photo: e.target.files?.[0] || null }))}
+                  className="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-gray-700 file:text-white hover:file:bg-gray-600" />
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-700">
+              <button onClick={() => setShowAddEmployee(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-sm font-medium transition-all">Cancelar</button>
+              <button onClick={saveEmployee} disabled={saving || !empForm.name.trim()}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50">
+                {saving ? 'Salvando...' : 'Cadastrar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD ALERT MODAL */}
+      {showAddAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setShowAddAlert(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-700">
+              <h3 className="text-white font-bold flex items-center gap-2"><ShieldOff size={18} className="text-red-400" /> Cadastrar Alerta Facial</h3>
+              <button onClick={() => setShowAddAlert(false)} className="p-1.5 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <input value={alertForm.name} onChange={e => setAlertForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="Nome / Identificação *" className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-red-500" />
+              <textarea value={alertForm.description} onChange={e => setAlertForm(f => ({ ...f, description: e.target.value }))}
+                placeholder="Descrição / Motivo do alerta" rows={2}
+                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm placeholder-gray-500 focus:outline-none focus:border-red-500 resize-none" />
+              <select value={alertForm.alert_level} onChange={e => setAlertForm(f => ({ ...f, alert_level: e.target.value }))}
+                className="w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:outline-none focus:border-red-500">
+                <option value="critical">🔴 Crítico</option>
+                <option value="high">🟠 Alto</option>
+                <option value="medium">🟡 Médio</option>
+                <option value="low">🔵 Baixo</option>
+              </select>
+              <div>
+                <label className="block text-gray-400 text-xs mb-1.5">Foto da pessoa (obrigatório) *</label>
+                <input type="file" accept="image/*" onChange={e => setAlertForm(f => ({ ...f, photo: e.target.files?.[0] || null }))}
+                  className="w-full text-sm text-gray-400 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-sm file:bg-red-900/50 file:text-red-300 hover:file:bg-red-900/70" />
+              </div>
+            </div>
+            <div className="flex gap-3 p-5 border-t border-gray-700">
+              <button onClick={() => setShowAddAlert(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-sm font-medium transition-all">Cancelar</button>
+              <button onClick={saveAlert} disabled={saving || !alertForm.name.trim() || !alertForm.photo}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-medium transition-all disabled:opacity-50">
+                {saving ? 'Salvando...' : 'Cadastrar Alerta'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 // ═══  EVENTS TAB  ═════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 
@@ -1783,6 +3201,174 @@ function EventsTab() {
 
 // ═══════════════════════════════════════════════════════════════
 // ═══  WEBHOOK SECTION (in camera edit form)  ══════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// ═══  CAMERA CONFIG MODAL  ════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+function CameraConfigModal({ camera, onClose }: { camera: any; onClose: () => void }) {
+  const [activeTab, setActiveTab] = useState<'specs' | 'network' | 'features'>('specs')
+
+  const specRows = [
+    { label: 'Modelo', value: camera.model, icon: <Cpu size={14} /> },
+    { label: 'Número de Série', value: camera.serial_number, icon: <HardDrive size={14} /> },
+    { label: 'Tipo', value: camera.camera_type, icon: <Camera size={14} /> },
+    { label: 'Resolução', value: camera.resolution, icon: <Monitor size={14} /> },
+    { label: 'Sensor', value: camera.sensor_type, icon: <Cpu size={14} /> },
+    { label: 'Lente / Focal', value: camera.lens_focal_length, icon: <Crosshair size={14} /> },
+    { label: 'Campo de Visão', value: camera.field_of_view, icon: <Eye size={14} /> },
+    { label: 'Alcance IR', value: camera.ir_range_m ? `${camera.ir_range_m}m` : null, icon: <Zap size={14} /> },
+    { label: 'Compressão', value: camera.compression_codecs, icon: <HardDrive size={14} /> },
+    { label: 'Proteção IP', value: camera.ip_rating, icon: <Shield size={14} /> },
+    { label: 'Temperatura', value: camera.operating_temp, icon: <Thermometer size={14} /> },
+    { label: 'Dimensões / Peso', value: camera.dimensions_weight, icon: <Info size={14} /> },
+    { label: 'Data de Fabricação', value: camera.manufacture_date, icon: <Info size={14} /> },
+    { label: 'Endereço MAC', value: camera.mac_address, icon: <WifiIcon size={14} /> },
+  ].filter(r => r.value)
+
+  const powerRows = [
+    { label: 'Alimentação', value: camera.power_input },
+    { label: 'Padrão PoE', value: camera.poe_standard },
+    { label: 'Potência máxima', value: camera.max_power_w ? `${camera.max_power_w}W` : null },
+  ].filter(r => r.value)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-gray-700/50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-500/15 border border-blue-500/20 rounded-xl flex items-center justify-center">
+              <Camera size={20} className="text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-white font-bold text-lg">{camera.name}</h2>
+              <p className="text-gray-400 text-sm font-mono">{camera.model} · S/N: {camera.serial_number || 'N/A'}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-800 rounded-xl transition-all text-gray-400 hover:text-white">
+            <X size={20} />
+          </button>
+        </div>
+
+        {/* Summary */}
+        {camera.summary_pt && (
+          <div className="mx-5 mt-4 p-4 bg-blue-500/8 border border-blue-500/15 rounded-xl">
+            <p className="text-blue-300 text-sm leading-relaxed">{camera.summary_pt}</p>
+          </div>
+        )}
+
+        {/* Tabs */}
+        <div className="flex gap-1 mx-5 mt-4 bg-gray-800/50 rounded-xl p-1">
+          {[
+            { key: 'specs', label: 'Especificações', icon: <Cpu size={14} /> },
+            { key: 'network', label: 'Energia / PoE', icon: <Zap size={14} /> },
+            { key: 'features', label: 'Funcionalidades', icon: <Shield size={14} /> },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key as any)}
+              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === t.key
+                  ? 'bg-gray-700 text-white'
+                  : 'text-gray-400 hover:text-gray-300'
+              }`}
+            >
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+          {activeTab === 'specs' && (
+            <div className="space-y-2">
+              {specRows.map((row, i) => (
+                <div key={i} className="flex items-start gap-3 p-3 bg-gray-800/40 border border-gray-700/30 rounded-xl">
+                  <div className="w-6 h-6 flex items-center justify-center text-cyan-400 mt-0.5 flex-shrink-0">
+                    {row.icon}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-gray-400 text-xs mb-0.5">{row.label}</p>
+                    <p className="text-white text-sm font-medium">{row.value}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activeTab === 'network' && (
+            <div className="space-y-3">
+              {/* Power specs */}
+              <div className="space-y-2">
+                <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider px-1">Especificações de Energia</h3>
+                {powerRows.map((row, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 bg-gray-800/40 border border-gray-700/30 rounded-xl">
+                    <span className="text-gray-400 text-sm">{row.label}</span>
+                    <span className="text-white text-sm font-medium font-mono">{row.value}</span>
+                  </div>
+                ))}
+              </div>
+              {/* Network config */}
+              <div className="space-y-2 mt-4">
+                <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider px-1">Configuração de Rede</h3>
+                {[
+                  { label: 'IP / Endereço', value: `${camera.ip_address}:${camera.http_port}` },
+                  { label: 'RTSP', value: `rtsp://${camera.ip_address}:${camera.rtsp_port}${camera.rtsp_path}` },
+                  { label: 'Usuário', value: camera.username },
+                  { label: 'Protocolos', value: camera.network_protocols },
+                ].filter(r => r.value).map((row, i) => (
+                  <div key={i} className="p-3 bg-gray-800/40 border border-gray-700/30 rounded-xl">
+                    <p className="text-gray-400 text-xs mb-1">{row.label}</p>
+                    <p className="text-white text-sm font-mono break-all">{row.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'features' && (
+            <div className="space-y-3">
+              {camera.special_features && (
+                <div>
+                  <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider px-1 mb-2">Funcionalidades Especiais</h3>
+                  <div className="p-4 bg-gray-800/40 border border-gray-700/30 rounded-xl">
+                    <div className="flex flex-wrap gap-2">
+                      {camera.special_features.split(',').map((feat: string, i: number) => (
+                        <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-500/10 border border-purple-500/20 text-purple-300 rounded-lg text-xs">
+                          <CheckCircle size={10} /> {feat.trim()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {camera.compression_codecs && (
+                <div>
+                  <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider px-1 mb-2">Compressão de Vídeo</h3>
+                  <div className="flex flex-wrap gap-2 p-3 bg-gray-800/40 border border-gray-700/30 rounded-xl">
+                    {camera.compression_codecs.split('/').map((codec: string, i: number) => (
+                      <span key={i} className="px-2.5 py-1 bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 rounded-lg text-xs font-mono">
+                        {codec.trim()}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-3 p-5 border-t border-gray-700/50">
+          <button onClick={onClose} className="px-5 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium transition-all text-sm">
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ═══════════════════════════════════════════════════════════════
 
 function WebhookSection({ cameraId }: { cameraId: number }) {

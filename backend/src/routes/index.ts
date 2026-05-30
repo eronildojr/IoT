@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import * as fsPromises from 'fs/promises';
 import path from 'path';
 import { getTraccar, getTraccarPositions, haversineMeters, findNearestAgent } from '../lib/dispatch';
+import { checkTraccarHealth } from '../services/traccarHealth';
 
 
 // ════════════════════════════════════════════════════════════
@@ -877,12 +878,20 @@ router.post('/auth/reset-password', async (req: Request, res: Response) => {
 // getTraccar / getTraccarPositions / haversineMeters / findNearestAgent → ../lib/dispatch
 
 router.get('/traccar/status', auth, async (req: Request, res: Response) => {
-  const cfg = await getTraccar(req.tenantId!);
-  if (!cfg) return res.json({ connected: false, message: 'Traccar não configurado' });
-  try {
-    const r = await axios.get(`${cfg.base}/api/server`, { auth: cfg.auth, timeout: 5000 });
-    return res.json({ connected: true, server: r.data });
-  } catch { return res.json({ connected: false, message: 'Não foi possível conectar' }); }
+  // Health check realista: valida /api/server (público) E /api/devices (com auth).
+  // Antes batia só em /api/server → falso-positivo quando a credencial do tenant
+  // estava errada. Ver services/traccarHealth.ts. Mantém o campo `connected` que
+  // o frontend (Trackers.tsx) consome; demais campos são enriquecimento.
+  const h = await checkTraccarHealth(req.tenantId!);
+  return res.json({
+    connected: h.connected,
+    status: h.status,
+    detail: h.detail,
+    latency_ms: h.latency_ms,
+    version: h.version,
+    device_count: h.device_count,
+    message: h.detail,
+  });
 });
 
 router.post('/traccar/configure', auth, requireRole('admin'), async (req: Request, res: Response) => {
@@ -1344,11 +1353,23 @@ async function syncCameraToShinobi(camRow: any): Promise<{ monitorId: string; gr
 // List IP cameras
 router.get('/ip-cameras', auth, async (req: Request, res: Response) => {
   const activeOnly = req.query.active_only === 'true';
+  const manufacturer = req.query.manufacturer as string | undefined;
+  const conditions: string[] = [];
+  if (activeOnly) conditions.push('active = TRUE');
+  if (manufacturer) conditions.push(`manufacturer = '${manufacturer.replace(/'/g, "''")}'`);
   let sql = 'SELECT * FROM ip_cameras';
-  if (activeOnly) sql += ' WHERE active = TRUE';
-  sql += ' ORDER BY name';
+  if (conditions.length > 0) sql += ' WHERE ' + conditions.join(' AND ');
+  // Order: cameras with valid IP first (online), then by name
+  sql += ` ORDER BY CASE WHEN ip_address IS NOT NULL AND ip_address::text != '0.0.0.0' AND ip_address::text != '' THEN 0 ELSE 1 END ASC, active DESC NULLS LAST, name ASC`;
   const rows: any[] = await query(sql);
-  return res.json(rows.map(stripPasswordFromRow));
+  // Add computed 'online' field: camera has valid IP = potentially online
+  const result = rows.map(row => {
+    const stripped = stripPasswordFromRow(row);
+    const ip = (stripped.ip_address || '').toString().trim();
+    const hasValidIp = ip && ip !== '0.0.0.0' && ip !== '';
+    return { ...stripped, online: hasValidIp ? true : false };
+  });
+  return res.json(result);
 });
 
 // Get IP camera by ID
@@ -1496,14 +1517,91 @@ router.get('/ip-cameras/:id/snapshot', auth, async (req: Request, res: Response)
   try {
     const id = Number(req.params.id);
     if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
-    const cam = await queryOne<any>('SELECT shinobi_monitor_id FROM ip_cameras WHERE id=$1', [id]);
+    const cam = await queryOne<any>('SELECT shinobi_monitor_id, ip_address, http_port, username, password_enc FROM ip_cameras WHERE id=$1', [id]);
     if (!cam) return res.status(404).json({ error: 'Câmera não encontrada' });
-    if (!cam.shinobi_monitor_id) {
+
+    // Helper: busca snapshot direto da câmera via Digest Auth (Hikvision)
+    async function fetchDirectSnapshot(): Promise<Buffer | null> {
+      if (!cam.ip_address || cam.ip_address === '0.0.0.0' || cam.ip_address === '') return null;
+      const http = await import('http');
+      const crypto = await import('crypto');
+      const ip = cam.ip_address;
+      const camPort = cam.http_port || 80;
+      const camUser = cam.username || 'admin';
+      let camPass = '';
+      try { camPass = cam.password_enc ? decryptPassword(cam.password_enc) : ''; } catch { camPass = ''; }
+      const snapshotPaths = [
+        '/ISAPI/Streaming/channels/101/picture',
+        '/cgi-bin/snapshot.cgi?channel=1',
+        '/snapshot.cgi',
+      ];
+      function md5(s: string): string { return (crypto as any).createHash('md5').update(s).digest('hex'); }
+      async function digestGet(path: string): Promise<Buffer | null> {
+        return new Promise((resolve) => {
+          const r1 = (http as any).request({ host: ip, port: camPort, path, method: 'GET', timeout: 5000 }, (res1: any) => {
+            res1.resume();
+            if (res1.statusCode === 401) {
+              const wwwAuth = res1.headers['www-authenticate'] || '';
+              const realm = (wwwAuth.match(/realm="([^"]+)"/) || [])[1] || '';
+              const nonce = (wwwAuth.match(/nonce="([^"]+)"/) || [])[1] || '';
+              const qop = (wwwAuth.match(/qop="?([^",]+)"?/) || [])[1] || '';
+              if (!realm || !nonce) { resolve(null); return; }
+              const nc = '00000001';
+              const cnonce = (crypto as any).randomBytes(8).toString('hex');
+              const ha1 = md5(`${camUser}:${realm}:${camPass}`);
+              const ha2 = md5(`GET:${path}`);
+              const resp = qop ? md5(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`) : md5(`${ha1}:${nonce}:${ha2}`);
+              let authHdr = `Digest username="${camUser}", realm="${realm}", nonce="${nonce}", uri="${path}", response="${resp}"`;
+              if (qop) authHdr += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`;
+              const r2 = (http as any).request({ host: ip, port: camPort, path, method: 'GET', headers: { 'Authorization': authHdr }, timeout: 7000 }, (res2: any) => {
+                const chunks: Buffer[] = [];
+                res2.on('data', (c: Buffer) => chunks.push(c));
+                res2.on('end', () => { if (res2.statusCode === 200) resolve(Buffer.concat(chunks)); else resolve(null); });
+              });
+              r2.on('error', () => resolve(null));
+              r2.on('timeout', () => { r2.destroy(); resolve(null); });
+              r2.end();
+            } else if (res1.statusCode === 200) {
+              const chunks: Buffer[] = [];
+              res1.on('data', (c: Buffer) => chunks.push(c));
+              res1.on('end', () => resolve(Buffer.concat(chunks)));
+            } else { resolve(null); }
+          });
+          r1.on('error', () => resolve(null));
+          r1.on('timeout', () => { r1.destroy(); resolve(null); });
+          r1.end();
+        });
+      }
+      for (const path of snapshotPaths) {
+        try {
+          const data = await digestGet(path);
+          if (data && data.length > 5000) return data;
+        } catch {}
+      }
+      return null;
+    }
+
+    // Try Shinobi first
+    let buf: Buffer | null = null;
+    if (cam.shinobi_monitor_id) {
+      buf = await shinobi.getSnapshotBuffer(cam.shinobi_monitor_id);
+      // If Shinobi returns a placeholder (< 10KB), fallback to direct camera
+      if (buf && buf.length < 10000) {
+        console.log(`[ip-cameras] snapshot cam=${id} shinobi placeholder (${buf.length}B), trying direct`);
+        const directBuf = await fetchDirectSnapshot();
+        if (directBuf) { buf = directBuf; }
+      }
+    }
+
+    // If no Shinobi or Shinobi failed, try direct
+    if (!buf) {
+      buf = await fetchDirectSnapshot();
+    }
+
+    if (!buf) {
       res.setHeader('X-Camera-Status', 'NAO_SINCRONIZADA');
       return res.status(204).end();
     }
-    const buf = await shinobi.getSnapshotBuffer(cam.shinobi_monitor_id);
-    if (!buf) return res.status(502).json({ error: 'Snapshot indisponível' });
     res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
     return res.send(buf);
   } catch (e: any) {
@@ -1524,6 +1622,67 @@ router.get('/ip-cameras/:id/stream-info', auth, async (req: Request, res: Respon
     return res.json({ monitor_id: cam.shinobi_monitor_id, active: cam.active, ...urls });
   } catch (e: any) {
     console.error('[ip-cameras] stream-info error:', e.message);
+    return res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+
+// Direct MJPEG proxy — bypasses Shinobi, streams directly from camera
+// Snapshot proxy — fetches snapshot directly from camera
+router.get('/ip-cameras/:id/snapshot-direct', auth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'ID inválido' });
+    const cam = await queryOne<any>('SELECT * FROM ip_cameras WHERE id=$1', [id]);
+    if (!cam) return res.status(404).json({ error: 'Câmera não encontrada' });
+    
+    const ip = cam.ip_address;
+    const port = cam.http_port || 80;
+    const user = cam.username || 'admin';
+    let pass = '';
+    try { pass = decryptPassword(cam.password_enc || ''); } catch { pass = cam.password_enc || ''; }
+    
+    const snapshotPaths = [
+      '/ISAPI/Streaming/channels/101/picture',
+      '/cgi-bin/snapshot.cgi?channel=1',
+      '/snapshot.cgi',
+      '/onvif-http/snapshot?Profile_1',
+    ];
+    
+    const http = await import('http');
+    const https = await import('https');
+    const auth64 = Buffer.from(`${user}:${pass}`).toString('base64');
+    
+    for (const path of snapshotPaths) {
+      try {
+        const protocol = port === 443 ? https : http;
+        const result = await new Promise<{ok: boolean, data?: Buffer, ct?: string}>((resolve) => {
+          const req2 = (protocol as any).request({
+            host: ip, port, path, method: 'GET',
+            headers: { 'Authorization': `Basic ${auth64}` },
+            timeout: 8000,
+          }, (r: any) => {
+            const chunks: Buffer[] = [];
+            r.on('data', (c: Buffer) => chunks.push(c));
+            r.on('end', () => {
+              if (r.statusCode === 200) resolve({ ok: true, data: Buffer.concat(chunks), ct: r.headers['content-type'] });
+              else resolve({ ok: false });
+            });
+          });
+          req2.on('error', () => resolve({ ok: false }));
+          req2.on('timeout', () => { req2.destroy(); resolve({ ok: false }); });
+          req2.end();
+        });
+        if (result.ok && result.data) {
+          res.setHeader('Content-Type', result.ct || 'image/jpeg');
+          res.setHeader('Cache-Control', 'no-cache');
+          return res.send(result.data);
+        }
+      } catch {}
+    }
+    return res.status(503).json({ error: 'Snapshot não disponível' });
+  } catch (e: any) {
+    console.error('[ip-cameras] snapshot-direct error:', e.message);
     return res.status(500).json({ error: 'Erro interno' });
   }
 });
@@ -2571,6 +2730,37 @@ router.get('/walkiefleet/messages', auth, async (req: Request, res: Response) =>
   return res.json(await query(sql, p));
 });
 
+// GET /walkiefleet/messages/history — histórico persistido por conversa, paginado (Prompt 32)
+router.get('/walkiefleet/messages/history', auth, async (req: Request, res: Response) => {
+  const { conversationType, peerId, before, limit = '50' } = req.query as any;
+  try {
+    const limitN = Math.min(parseInt(limit) || 50, 200);
+    const beforeTs = before
+      ? (isNaN(Number(before)) ? new Date(before) : new Date(Number(before)))
+      : new Date();
+    let where = `tenant_id=$1 AND event_ts IS NOT NULL AND event_ts < $2`;
+    const params: any[] = [req.tenantId, beforeTs]; let i = 3;
+    if (conversationType === 'private' && peerId) {
+      where += ` AND conversation_type='private' AND (to_user_id=$${i} OR from_user_id=$${i})`;
+      params.push(peerId); i++;
+    } else if (conversationType === 'group' && peerId) {
+      where += ` AND conversation_type='group' AND to_group_id=$${i}`;
+      params.push(peerId); i++;
+    }
+    const rows = await query(
+      `SELECT id, direction, job_id, from_user_id, from_user_name, to_user_id, to_group_id,
+              conversation_type, message_type, content,
+              attachment_mime, attachment_size, attachment_filename, event_ts
+       FROM walkiefleet_messages WHERE ${where}
+       ORDER BY event_ts DESC LIMIT ${limitN}`,
+      params
+    );
+    return res.json({ messages: (rows as any[]).reverse() });  // mais antigo primeiro
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // PTT: registrar transmissao (chamado pelo WebSocket handler)
 router.post('/walkiefleet/ptt/record', auth, async (req: Request, res: Response) => {
   const { deviceId, groupId, durationSeconds, callId } = req.body;
@@ -2602,6 +2792,68 @@ router.post('/walkiefleet/config', auth, requireRole('admin'), async (req: Reque
   return res.json({ success: true });
 });
 
+// PUT /walkiefleet/config — atualiza credenciais do dispatcher + audit log (Prompt 31)
+router.put('/walkiefleet/config', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  const userId = req.user?.id || null;
+  const userEmail = req.user?.email || null;
+  const { wfServerHost, wfServerPort, wfDispatcherLogin, wfDispatcherPass } = req.body || {};
+
+  if (wfServerPort !== undefined && (typeof wfServerPort !== 'number' || wfServerPort < 1 || wfServerPort > 65535)) {
+    return res.status(400).json({ error: 'wfServerPort inválida' });
+  }
+  if (wfServerHost !== undefined && (typeof wfServerHost !== 'string' || wfServerHost.length > 200)) {
+    return res.status(400).json({ error: 'wfServerHost inválido' });
+  }
+
+  try {
+    const before = (await queryOne<any>(
+      'SELECT wf_server_host, wf_server_port, wf_dispatcher_login, wf_dispatcher_pass FROM tenants WHERE id=$1',
+      [req.tenantId]
+    )) || {};
+
+    const sets: string[] = []; const vals: any[] = []; let i = 1;
+    if (wfServerHost !== undefined) { sets.push(`wf_server_host=$${i++}`); vals.push(wfServerHost); }
+    if (wfServerPort !== undefined) { sets.push(`wf_server_port=$${i++}`); vals.push(wfServerPort); }
+    if (wfDispatcherLogin !== undefined) { sets.push(`wf_dispatcher_login=$${i++}`); vals.push(wfDispatcherLogin); }
+    if (wfDispatcherPass !== undefined && String(wfDispatcherPass).length > 0) { sets.push(`wf_dispatcher_pass=$${i++}`); vals.push(wfDispatcherPass); }
+    if (sets.length === 0) return res.status(400).json({ error: 'nenhum campo para atualizar' });
+    vals.push(req.tenantId);
+    await query(`UPDATE tenants SET ${sets.join(', ')} WHERE id=$${i}`, vals);
+
+    // Audit log (senha mascarada — nunca em claro)
+    const changes: any[] = [];
+    if (wfServerHost !== undefined && wfServerHost !== before.wf_server_host) changes.push(['wf_server_host', before.wf_server_host || '', wfServerHost]);
+    if (wfServerPort !== undefined && wfServerPort !== before.wf_server_port) changes.push(['wf_server_port', String(before.wf_server_port || ''), String(wfServerPort)]);
+    if (wfDispatcherLogin !== undefined && wfDispatcherLogin !== before.wf_dispatcher_login) changes.push(['wf_dispatcher_login', before.wf_dispatcher_login || '', wfDispatcherLogin]);
+    if (wfDispatcherPass !== undefined && String(wfDispatcherPass).length > 0) changes.push(['wf_dispatcher_pass', '***', '***']);
+    for (const [field, oldV, newV] of changes) {
+      await query(
+        `INSERT INTO walkiefleet_config_log (tenant_id, changed_by_user_id, changed_by_email, field, old_value, new_value)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [req.tenantId, userId, userEmail, field, oldV, newV]
+      );
+    }
+    return res.json({ ok: true, changed: changes.length });
+  } catch (err: any) {
+    console.error('[wf-config] erro PUT config:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /walkiefleet/config/audit-log — últimas alterações de config (Prompt 31)
+router.get('/walkiefleet/config/audit-log', auth, async (req: Request, res: Response) => {
+  try {
+    const entries = await query(
+      `SELECT field, old_value, new_value, changed_by_email, changed_at
+       FROM walkiefleet_config_log WHERE tenant_id=$1 ORDER BY changed_at DESC LIMIT 50`,
+      [req.tenantId]
+    );
+    return res.json({ entries });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Bulk update device status (from WebSocket events)
 router.post('/walkiefleet/devices/bulk-status', auth, async (req: Request, res: Response) => {
   const { updates } = req.body; // [{deviceId, status, batteryLevel, signalStrength, lat, lng}]
@@ -2631,6 +2883,7 @@ router.post('/walkiefleet/events/message', auth, async (req: Request, res: Respo
     conversationType,
     text, contentType,
     hasAttachment, isSos,
+    attachmentMime, attachmentSize, attachmentFilename,
     ts,
   } = req.body || {};
 
@@ -2641,8 +2894,10 @@ router.post('/walkiefleet/events/message', auth, async (req: Request, res: Respo
     return res.status(400).json({ error: 'direction deve ser in|out' });
   }
 
-  // Deriva message_type para satisfazer o check constraint legado (voice|text|sos|broadcast|location)
-  const messageType = isSos ? 'sos' : (contentType === 'image' || contentType === 'file' ? 'text' : 'text');
+  // Deriva message_type (constraint expandida na migration 030: +image,+file)
+  let messageType = 'text';
+  if (isSos) messageType = 'sos';
+  else if (hasAttachment) messageType = (attachmentMime && String(attachmentMime).startsWith('image/')) ? 'image' : 'file';
 
   try {
     const row = await queryOne<any>(
@@ -2650,8 +2905,9 @@ router.post('/walkiefleet/events/message', auth, async (req: Request, res: Respo
         (tenant_id, direction, job_id, from_user_id, from_user_name,
          to_user_id, to_group_id, conversation_type, content,
          content_type, has_attachment, is_sos, message_type,
+         attachment_mime, attachment_size, attachment_filename,
          event_ts, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,to_timestamp($14::double precision/1000.0),NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,to_timestamp($17::double precision/1000.0),NOW())
        RETURNING id`,
       [
         req.tenantId, direction, jobId || null,
@@ -2662,6 +2918,7 @@ router.post('/walkiefleet/events/message', auth, async (req: Request, res: Respo
         contentType || 'text',
         !!hasAttachment, !!isSos,
         messageType,
+        attachmentMime || null, attachmentSize || null, attachmentFilename || null,
         ts || Date.now(),
       ]
     );
@@ -2718,26 +2975,171 @@ router.post('/walkiefleet/events/ptt-end', auth, async (req: Request, res: Respo
   }
 });
 
+// POST /walkiefleet/events/command-response — persiste resposta de Call Alert / Radio Check (Prompt 27)
+router.post('/walkiefleet/events/command-response', auth, async (req: Request, res: Response) => {
+  const { commandId, commandType, state, deviceId, deviceName, ts } = req.body || {};
+  if (!commandId || !commandType) {
+    return res.status(400).json({ error: 'commandId e commandType obrigatórios' });
+  }
+  try {
+    await query(
+      `INSERT INTO walkiefleet_messages
+        (tenant_id, direction, job_id, message_type, content,
+         conversation_type, event_ts, created_at)
+       VALUES ($1, 'in', $2, $3, $4, 'private',
+               to_timestamp($5::double precision/1000.0), NOW())`,
+      [
+        req.tenantId,
+        commandId,
+        commandType,  // 'call-alert' | 'radio-check'
+        JSON.stringify({ state, deviceId: deviceId || null, deviceName: deviceName || null }),
+        ts || Date.now(),
+      ]
+    );
+    return res.json({ ok: true });
+  } catch (err: any) {
+    console.error('[wf-events] erro persistindo command-response:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SOS de emergência (Prompt 26) ───────────────────────────────────
+// POST /walkiefleet/events/sos — registra início de SOS
+router.post('/walkiefleet/events/sos', auth, async (req: Request, res: Response) => {
+  const userId = req.user?.id || null;
+  const userEmail = req.user?.email || null;
+  const { groupId, groupName, callId, triggeredByLogin, ts } = req.body || {};
+  if (!groupId) return res.status(400).json({ error: 'groupId obrigatório' });
+  try {
+    const row = await queryOne<any>(
+      `INSERT INTO walkiefleet_sos_events
+        (tenant_id, triggered_by_user_id, triggered_by_email, triggered_by_login,
+         group_id, group_name, call_id, started_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, to_timestamp($8::double precision/1000.0))
+       RETURNING id`,
+      [req.tenantId, userId, userEmail, triggeredByLogin || null,
+       groupId, groupName || null, callId || null, ts || Date.now()]
+    );
+    return res.json({ ok: true, sosEventId: row?.id || null });
+  } catch (err: any) {
+    console.error('[wf-sos] erro:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /walkiefleet/events/sos-end — encerra SOS
+router.post('/walkiefleet/events/sos-end', auth, async (req: Request, res: Response) => {
+  const { callId, durationMs, ts } = req.body || {};
+  if (!callId) return res.status(400).json({ error: 'callId obrigatório' });
+  try {
+    await query(
+      `UPDATE walkiefleet_sos_events
+       SET ended_at = to_timestamp($1::double precision/1000.0), duration_ms = $2
+       WHERE tenant_id = $3 AND call_id = $4 AND ended_at IS NULL`,
+      [ts || Date.now(), durationMs || null, req.tenantId, callId]
+    );
+    return res.json({ ok: true });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /walkiefleet/sos-events — lista SOSs (auditoria)
+router.get('/walkiefleet/sos-events', auth, async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt((req.query.limit as string)) || 50, 200);
+  try {
+    const events = await query(
+      `SELECT id, triggered_by_email, triggered_by_login, group_name, call_id,
+              started_at, ended_at, duration_ms, acknowledged_by
+       FROM walkiefleet_sos_events
+       WHERE tenant_id = $1
+       ORDER BY started_at DESC LIMIT $2`,
+      [req.tenantId, limit]
+    );
+    return res.json({ events });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Recording de chamadas PTT (Prompt 33) ───────────────────────────
+const recordingUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+const PTT_REC_DIR = '/var/groupates/ptt-recordings';
+
+// POST /walkiefleet/recordings — recebe WAV (multipart) e atualiza walkiefleet_ptt_calls
+router.post('/walkiefleet/recordings', auth, recordingUpload.single('audio'), async (req: Request, res: Response) => {
+  const file = (req as any).file;
+  if (!file) return res.status(400).json({ error: 'arquivo ausente' });
+  const { callId, durationMs, isSos } = req.body || {};
+  if (!callId) return res.status(400).json({ error: 'callId obrigatório' });
+  const sosFlag = isSos === true || isSos === 'true' || isSos === '1';
+  try {
+    const dir = path.join(PTT_REC_DIR, req.tenantId as string);
+    await fsPromises.mkdir(dir, { recursive: true });
+    const safeCallId = String(callId).replace(/[^A-Za-z0-9._-]/g, '_');
+    const filename = `${safeCallId}.wav`;
+    await fsPromises.writeFile(path.join(dir, filename), file.buffer);
+    const url = `/api/walkiefleet/recordings/${req.tenantId}/${filename}`;
+    await query(
+      `UPDATE walkiefleet_ptt_calls SET recording_url=$1, recording_size=$2, recording_duration_ms=$3
+       WHERE tenant_id=$4 AND call_id=$5`,
+      [url, file.size, parseInt(durationMs) || null, req.tenantId, callId]
+    );
+    // Gravação de SOS: garante o vínculo via call_id no evento de auditoria
+    if (sosFlag) {
+      await query(
+        `UPDATE walkiefleet_sos_events SET call_id = $1
+         WHERE id = (SELECT id FROM walkiefleet_sos_events
+                     WHERE tenant_id = $2 AND call_id IS NULL
+                     ORDER BY started_at DESC LIMIT 1)`,
+        [callId, req.tenantId]
+      );
+    }
+    return res.json({ ok: true, url, size: file.size, isSos: sosFlag });
+  } catch (err: any) {
+    console.error('[wf-recordings] upload erro:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /walkiefleet/recordings/:tenantIdParam/:filename — download tenant-scoped
+router.get('/walkiefleet/recordings/:tenantIdParam/:filename', auth, async (req: Request, res: Response) => {
+  const { tenantIdParam, filename } = req.params;
+  if (tenantIdParam !== req.tenantId) return res.status(403).json({ error: 'acesso negado' });
+  const safe = filename.replace(/[^A-Za-z0-9._-]/g, '_');
+  const full = path.join(PTT_REC_DIR, req.tenantId as string, safe);
+  try {
+    await fsPromises.access(full);
+    return res.sendFile(full);
+  } catch {
+    return res.status(404).json({ error: 'gravação não encontrada' });
+  }
+});
+
 // POST /walkiefleet/events/devices-snapshot — upsert em lote de devices vindos do DATAEX
 router.post('/walkiefleet/events/devices-snapshot', auth, async (req: Request, res: Response) => {
   const { devices } = req.body || {};
   if (!Array.isArray(devices)) return res.status(400).json({ error: 'devices deve ser array' });
 
   let count = 0;
-  try {
-    for (const d of devices) {
-      if (!d.deviceId) continue;
-      const status = d.online ? 'online' : 'offline';
-      const displayName = d.userName || d.login || d.deviceId.slice(0, 12);
+  const errors: string[] = [];
+  // Upsert por (tenant_id, login): o device_id muda a cada sessão do dispatch,
+  // então a identidade estável do rádio é o login (ver migration 034).
+  for (const d of devices) {
+    if (!d.login || !d.deviceId) continue;   // login = chave de dedup; device_id é NOT NULL
+    const status = d.online ? 'online' : 'offline';
+    const displayName = d.userName || d.login || String(d.deviceId).slice(0, 12);
+    try {
       await query(
         `INSERT INTO walkiefleet_devices
           (tenant_id, device_id, name, wf_user_id, wf_user_name, login,
            status, last_location_lat, last_location_lng, last_seen_at, updated_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())
-         ON CONFLICT (tenant_id, device_id) DO UPDATE SET
+         ON CONFLICT (tenant_id, login) WHERE login IS NOT NULL DO UPDATE SET
+           device_id     = EXCLUDED.device_id,
+           name          = COALESCE(EXCLUDED.name, walkiefleet_devices.name),
            wf_user_id    = EXCLUDED.wf_user_id,
            wf_user_name  = EXCLUDED.wf_user_name,
-           login         = EXCLUDED.login,
            status        = EXCLUDED.status,
            last_location_lat = COALESCE(EXCLUDED.last_location_lat, walkiefleet_devices.last_location_lat),
            last_location_lng = COALESCE(EXCLUDED.last_location_lng, walkiefleet_devices.last_location_lng),
@@ -2745,18 +3147,18 @@ router.post('/walkiefleet/events/devices-snapshot', auth, async (req: Request, r
            updated_at    = NOW()`,
         [
           req.tenantId, d.deviceId, displayName,
-          d.userId || null, d.userName || null, d.login || null,
+          d.userId || null, d.userName || null, d.login,
           status,
           d.lat ?? null, d.lng ?? null,
         ]
       );
       count++;
+    } catch (e: any) {
+      errors.push(`${d.login}: ${e.message}`);
     }
-    return res.json({ ok: true, count });
-  } catch (err: any) {
-    console.error('[wf-events] erro devices-snapshot:', err.message);
-    return res.status(500).json({ error: err.message, count });
   }
+  if (errors.length) console.error('[wf-events] devices-snapshot parciais:', errors);
+  return res.json({ ok: true, count, errors: errors.length ? errors : undefined });
 });
 
 // POST /walkiefleet/events/groups-snapshot — upsert em lote de grupos do DATAEX
@@ -3140,6 +3542,393 @@ router.get('/usage', auth, async (req: Request, res: Response) => {
       users: counts ? Math.round((Number(counts.user_count) / (tenant?.max_users || 1)) * 100) : 0,
     }
   });
+});
+
+
+
+// ════════════════════════════════════════════════════════════
+// LORAWAN / CHIRPSTACK
+// ════════════════════════════════════════════════════════════
+
+// GET /lorawan/devices — listar dispositivos LoRaWAN
+router.get('/lorawan/devices', auth, async (req: Request, res: Response) => {
+  try {
+    const rows = await query<any>(
+      `SELECT d.*,
+        dm.name as model_name
+       FROM devices d
+       LEFT JOIN device_models dm ON dm.id = d.model_id
+       WHERE d.tenant_id = $1
+         AND d.protocol = 'lorawan'
+       ORDER BY d.updated_at DESC`,
+      [req.tenantId]
+    );
+    return res.json({ devices: rows, total: rows.length });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'Erro interno' }); }
+});
+
+// POST /lorawan/devices — criar/registrar dispositivo LoRaWAN manualmente
+router.post('/lorawan/devices', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
+  const { name, devEUI, appEUI, appKey, region, joinType = 'OTAA', notes, modelId } = req.body;
+  if (!name || !devEUI) return res.status(400).json({ error: 'name e devEUI são obrigatórios' });
+  
+  const devEUIClean = devEUI.toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (devEUIClean.length !== 16) return res.status(400).json({ error: 'DevEUI deve ter 16 caracteres hex' });
+  
+  try {
+    const d = await queryOne<any>(
+      `INSERT INTO devices(
+        tenant_id, model_id, created_by, name, identifier, protocol, type,
+        lorawan_dev_eui, lorawan_app_eui, lorawan_app_key,
+        lorawan_join_type, lorawan_region, notes, tags, status
+      ) VALUES($1,$2,$3,$4,$5,'lorawan','iot',$6,$7,$8,$9,$10,$11,$12,'offline')
+      RETURNING *`,
+      [
+        req.tenantId, modelId || null, req.user!.id,
+        name, `lorawan_${devEUIClean}`,
+        devEUIClean, appEUI || null, appKey || null,
+        joinType, region || 'EU868',
+        notes || null, ['lorawan']
+      ]
+    );
+    return res.status(201).json(d);
+  } catch (e: any) {
+    if (e.code === '23505') return res.status(409).json({ error: 'DevEUI já cadastrado' });
+    throw e;
+  }
+});
+
+// GET /lorawan/sync — sincronizar dispositivos do ChirpStack para a plataforma
+router.get('/lorawan/sync', auth, requireRole('admin'), async (req: Request, res: Response) => {
+  try {
+    // Buscar dispositivos do ChirpStack via banco direto (mesma rede Docker)
+    const { Pool: PgPool } = await import('pg');
+    const csPool = new PgPool({
+      host: process.env.CHIRPSTACK_DB_HOST || 'iot_postgres',
+      port: 5432,
+      database: 'chirpstack',
+      user: process.env.CHIRPSTACK_DB_USER || 'chirpstack',
+      password: process.env.CHIRPSTACK_DB_PASS || 'chirpstack',
+    });
+    
+    const csResult = await csPool.query(`
+      SELECT 
+        encode(d.dev_eui, 'hex') as dev_eui,
+        d.name,
+        d.description,
+        a.name as application_name,
+        dp.name as profile_name,
+        dp.region,
+        d.is_disabled
+      FROM device d
+      JOIN application a ON d.application_id = a.id
+      JOIN device_profile dp ON d.device_profile_id = dp.id
+      ORDER BY d.name
+    `);
+    
+    await csPool.end();
+    
+    let created = 0, updated = 0;
+    
+    for (const csDevice of csResult.rows) {
+      const devEUI = csDevice.dev_eui.toLowerCase();
+      const identifier = `lorawan_${devEUI}`;
+      
+      const existing = await queryOne<any>(
+        `SELECT id FROM devices WHERE tenant_id=$1 AND lorawan_dev_eui=$2`,
+        [req.tenantId, devEUI]
+      );
+      
+      if (!existing) {
+        await query(
+          `INSERT INTO devices(
+            tenant_id, created_by, name, identifier, protocol, type,
+            lorawan_dev_eui, lorawan_region, lorawan_chirpstack_id,
+            status, notes, tags
+          ) VALUES($1,$2,$3,$4,'lorawan','iot',$5,$6,$7,'offline',$8,$9)
+          ON CONFLICT (tenant_id, identifier) DO UPDATE SET
+            lorawan_region=$6, lorawan_chirpstack_id=$7, updated_at=NOW()`,
+          [
+            req.tenantId, req.user!.id,
+            csDevice.name, identifier,
+            devEUI, csDevice.region || 'EU868',
+            csDevice.application_name,
+            csDevice.description || `Dispositivo LoRaWAN - ${csDevice.profile_name}`,
+            ['lorawan', 'chirpstack']
+          ]
+        );
+        created++;
+      } else {
+        await query(
+          `UPDATE devices SET
+            lorawan_region=$2, lorawan_chirpstack_id=$3,
+            updated_at=NOW()
+          WHERE id=$1`,
+          [existing.id, csDevice.region || 'EU868', csDevice.application_name]
+        );
+        updated++;
+      }
+    }
+    
+    return res.json({
+      success: true,
+      message: `Sincronização concluída: ${created} criados, ${updated} atualizados`,
+      created, updated,
+      total: csResult.rows.length,
+      devices: csResult.rows
+    });
+  } catch (e: any) {
+    console.error('[LoRaWAN Sync]', e);
+    return res.status(500).json({ error: 'Erro ao sincronizar com ChirpStack: ' + e.message });
+  }
+});
+
+// GET /lorawan/status — status do bridge ChirpStack
+router.get('/lorawan/status', auth, async (req: Request, res: Response) => {
+  try {
+    const { getChirpstackBridgeStatus } = await import('../services/chirpstackBridge');
+    const status = getChirpstackBridgeStatus();
+    const count = await queryOne<any>(
+      `SELECT COUNT(*) as total FROM devices WHERE tenant_id=$1 AND protocol='lorawan'`,
+      [req.tenantId]
+    );
+    return res.json({ ...status, lorawan_devices: parseInt(count?.total || '0') });
+  } catch (e) {
+    return res.json({ connected: false, lorawan_devices: 0 });
+  }
+});
+
+
+// ── MJPEG Direct Proxy ──────────────────────────────────────────────────────
+// Proxies MJPEG stream directly from Hikvision camera without Shinobi
+async function handleDirectMjpegStream(req: Request, res: Response) {
+  try {
+    const { id } = req.params;
+    const rows: any[] = await query('SELECT * FROM ip_cameras WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Camera not found' });
+    
+    const cam = rows[0];
+    if (!cam.ip_address || cam.ip_address === '0.0.0.0') {
+      return res.status(400).json({ error: 'Camera has no IP address configured' });
+    }
+    
+    let password = '';
+    try {
+      password = cam.password_enc ? decryptPassword(cam.password_enc) : '';
+    } catch (e) {
+      password = '';
+    }
+    
+    const username = cam.username || 'admin';
+    const ip = cam.ip_address;
+    const port = cam.http_port || 80;
+    const streamPath = '/ISAPI/Streaming/channels/1/picture'; // picture works, httppreview returns 403
+    
+    // Hikvision uses Digest Authentication
+    // Step 1: Initial request to get WWW-Authenticate header with nonce
+    const http = require('http');
+    const crypto = require('crypto');
+    
+    function md5(str: string): string {
+      return crypto.createHash('md5').update(str).digest('hex');
+    }
+    
+    function buildDigestAuth(wwwAuth: string, method: string, uri: string): string {
+      const realmMatch = wwwAuth.match(/realm="([^"]+)"/);
+      const nonceMatch = wwwAuth.match(/nonce="([^"]+)"/);
+      const qopMatch = wwwAuth.match(/qop="([^"]+)"/);
+      
+      const realm = realmMatch ? realmMatch[1] : '';
+      const nonce = nonceMatch ? nonceMatch[1] : '';
+      const qop = qopMatch ? qopMatch[1].split(',')[0].trim() : '';
+      
+      const ha1 = md5(`${username}:${realm}:${password}`);
+      const ha2 = md5(`${method}:${uri}`);
+      const nc = '00000001';
+      const cnonce = crypto.randomBytes(8).toString('hex');
+      
+      let response: string;
+      if (qop === 'auth' || qop === 'auth-int') {
+        response = md5(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`);
+        return `Digest username="${username}", realm="${realm}", nonce="${nonce}", uri="${uri}", qop=${qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
+      } else {
+        response = md5(`${ha1}:${nonce}:${ha2}`);
+        return `Digest username="${username}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${response}"`;
+      }
+    }
+    
+    // Step 1: Get nonce
+    const step1 = await new Promise<string>((resolve, reject) => {
+      const req1 = http.request({
+        hostname: ip, port, path: streamPath, method: 'GET',
+        headers: { 'User-Agent': 'IoT-Platform/1.0' },
+        timeout: 8000,
+      }, (r1: any) => {
+        r1.resume();
+        if (r1.statusCode === 401) {
+          resolve(r1.headers['www-authenticate'] || '');
+        } else {
+          resolve('');
+        }
+      });
+      req1.on('error', reject);
+      req1.on('timeout', () => { req1.destroy(); reject(new Error('Timeout getting nonce')); });
+      req1.end();
+    });
+    
+    if (!step1) {
+      return res.status(502).json({ error: 'Camera did not return authentication challenge' });
+    }
+    
+    // Step 2: Stream with Digest Auth
+    const digestHeader = buildDigestAuth(step1, 'GET', streamPath);
+    
+    const proxyReq = http.request({
+      hostname: ip, port, path: streamPath, method: 'GET',
+      headers: {
+        'Authorization': digestHeader,
+        'User-Agent': 'IoT-Platform/1.0',
+        'Accept': '*/*',
+        'Connection': 'keep-alive',
+      },
+      timeout: 30000,
+    }, (proxyRes: any) => {
+      if (proxyRes.statusCode === 401) {
+        if (!res.headersSent) res.status(401).json({ error: 'Camera authentication failed - check credentials' });
+        return;
+      }
+      
+      const contentType = proxyRes.headers['content-type'] || 'multipart/x-mixed-replace; boundary=--myboundary';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.status(proxyRes.statusCode || 200);
+      
+      proxyRes.pipe(res);
+      
+      req.on('close', () => { proxyReq.destroy(); });
+      proxyRes.on('error', () => { if (!res.headersSent) res.end(); });
+    });
+    
+    proxyReq.on('error', (err: any) => {
+      if (!res.headersSent) res.status(502).json({ error: 'Cannot connect to camera', details: err.message });
+    });
+    
+    proxyReq.on('timeout', () => {
+      proxyReq.destroy();
+      if (!res.headersSent) res.status(504).json({ error: 'Camera stream timeout' });
+    });
+    
+    proxyReq.end();
+    
+  } catch (err: any) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+}
+
+
+// Live frame endpoint - returns single JPEG snapshot for live view simulation
+router.get('/ip-cameras/:id/live-frame', auth, async (req: Request, res: Response) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+    const rows: any[] = await query('SELECT id, ip_address, http_port, username, password_enc FROM ip_cameras WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Camera not found' });
+    const cam = rows[0];
+    if (!cam.ip_address || cam.ip_address === '0.0.0.0') return res.status(503).json({ error: 'No IP configured' });
+    let password = '';
+    try { password = cam.password_enc ? decryptPassword(cam.password_enc) : ''; } catch (e) { password = ''; }
+    const username = cam.username || 'admin';
+    const ip = cam.ip_address;
+    const port = cam.http_port || 80;
+    const picturePaths = [
+      '/ISAPI/Streaming/channels/1/picture',
+      '/ISAPI/Streaming/channels/101/picture',
+    ];
+    const http = require('http');
+    const crypto = require('crypto');
+    const md5 = (str: string): string => crypto.createHash('md5').update(str).digest('hex');
+    const buildDigestAuth = (wwwAuth: string, method: string, uri: string): string => {
+      const realm = (wwwAuth.match(/realm="([^"]+)"/) || [])[1] || '';
+      const nonce = (wwwAuth.match(/nonce="([^"]+)"/) || [])[1] || '';
+      const qop = ((wwwAuth.match(/qop="([^"]+)"/) || [])[1] || '').split(',')[0].trim();
+      const ha1 = md5(`${username}:${realm}:${password}`);
+      const ha2 = md5(`${method}:${uri}`);
+      const nc = '00000001';
+      const cnonce = crypto.randomBytes(8).toString('hex');
+      if (qop === 'auth' || qop === 'auth-int') {
+        const response = md5(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`);
+        return `Digest username="${username}", realm="${realm}", nonce="${nonce}", uri="${uri}", qop=${qop}, nc=${nc}, cnonce="${cnonce}", response="${response}"`;
+      }
+      const response = md5(`${ha1}:${nonce}:${ha2}`);
+      return `Digest username="${username}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${response}"`;
+    };
+    for (const picPath of picturePaths) {
+      try {
+        const wwwAuth = await new Promise<string>((resolve, reject) => {
+          const r1 = http.request({ hostname: ip, port, path: picPath, method: 'GET', headers: { 'User-Agent': 'IoT-Platform/1.0' }, timeout: 5000 }, (res1: any) => {
+            res1.resume();
+            if (res1.statusCode === 401) resolve(res1.headers['www-authenticate'] || '');
+            else resolve('');
+          });
+          r1.on('error', reject);
+          r1.on('timeout', () => { r1.destroy(); reject(new Error('timeout')); });
+          r1.end();
+        });
+        if (!wwwAuth) continue;
+        const digestHeader = buildDigestAuth(wwwAuth, 'GET', picPath);
+        const { status, data, contentType } = await new Promise<{ status: number; data: Buffer; contentType: string }>((resolve, reject) => {
+          const chunks: Buffer[] = [];
+          const r2 = http.request({ hostname: ip, port, path: picPath, method: 'GET', headers: { 'Authorization': digestHeader, 'User-Agent': 'IoT-Platform/1.0' }, timeout: 8000 }, (res2: any) => {
+            res2.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res2.on('end', () => resolve({ status: res2.statusCode, data: Buffer.concat(chunks), contentType: res2.headers['content-type'] || 'image/jpeg' }));
+          });
+          r2.on('error', reject);
+          r2.on('timeout', () => { r2.destroy(); reject(new Error('timeout')); });
+          r2.end();
+        });
+        if (status === 200 && data.length > 100) {
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          return res.status(200).send(data);
+        }
+      } catch (e) { continue; }
+    }
+    return res.status(503).json({ error: 'Could not get frame from camera' });
+  } catch (err: any) {
+    if (!res.headersSent) res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/ip-cameras/:id/direct-stream', auth, (req: Request, res: Response) => handleDirectMjpegStream(req, res));
+router.get('/ip-cameras/:id/mjpeg-direct', auth, (req: Request, res: Response) => handleDirectMjpegStream(req, res));
+
+// Get stream info with direct proxy fallback
+router.get('/ip-cameras/:id/stream-info-v2', auth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const rows: any[] = await query('SELECT id, name, ip_address, http_port, username, shinobi_monitor_id, shinobi_group_key FROM ip_cameras WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Camera not found' });
+    
+    const cam = rows[0];
+    const hasIp = cam.ip_address && cam.ip_address !== '0.0.0.0';
+    const hasShinobi = cam.shinobi_monitor_id && cam.shinobi_group_key;
+    
+    return res.json({
+      cameraId: cam.id,
+      name: cam.name,
+      hasDirectAccess: hasIp,
+      hasShinobi: hasShinobi,
+      directStreamUrl: hasIp ? `/api/ip-cameras/${id}/direct-stream` : null,
+      shinobiStreamUrl: hasShinobi ? `/api/ip-cameras/by-monitor/${cam.shinobi_monitor_id}/stream.mjpeg` : null,
+      ipAddress: cam.ip_address,
+      httpPort: cam.http_port || 80,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 
