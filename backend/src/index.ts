@@ -17,6 +17,7 @@ import facialRoutes from './routes/facial';
 import facialExtendedRoutes from './routes/facial_extended';
 import employeesAlertsRoutes from './routes/employees_alerts';
 import { startChirpstackBridge, getChirpstackBridgeStatus } from './services/chirpstackBridge';
+import { startFacePolling } from './services/facePolling';
 
 dotenv.config();
 
@@ -63,9 +64,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb', type: 'application/x
 app.use('/snapshots', express.static(process.env.EVENT_SNAPSHOTS_DIR || '/app/data/event-snapshots', { maxAge: '7d', immutable: true }));
 
 // Rate limiting
-app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Muitas tentativas. Tente em 15 minutos.' } }));
-app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
-app.use(/^\/api\/(?!jimi\/push|jimi\/upload|ip-cameras\/\d+\/events\/)/, rateLimit({ windowMs: 60 * 1000, max: 300 }));
+// Login: estrito contra brute-force — 10 falhas/15min por IP (sucessos não contam).
+app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas tentativas de login. Tente em 15 minutos.' } }));
+app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
+// Geral: 300 req/min por IP. Exclui webhooks de alta frequência (jimi push/upload, eventos de câmera IP).
+app.use(/^\/api\/(?!jimi\/push|jimi\/upload|ip-cameras\/\d+\/events\/)/, rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas requisições — tente novamente em instantes' } }));
 
 // Rotas
 app.use('/api', routes);
@@ -105,6 +108,13 @@ runMigrations().then(() => {
     startChirpstackBridge();
   } catch (err) {
     console.error('[ChirpStack Bridge] Falha ao iniciar:', err);
+  }
+  // Iniciar polling de reconhecimento facial das câmeras Hikvision
+  try {
+    setTimeout(() => startFacePolling(), 8000);
+    console.log('[FacePolling] Agendado para iniciar em 8s');
+  } catch (err) {
+    console.error('[FacePolling] Falha ao iniciar:', err);
   }
 
   const server = app.listen(PORT, '0.0.0.0', () => {

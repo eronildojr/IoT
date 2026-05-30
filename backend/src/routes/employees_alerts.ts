@@ -109,7 +109,7 @@ router.delete('/employees/:id', auth, async (req: Request, res: Response) => {
 router.get('/employees/:id/recognitions', auth, async (req: Request, res: Response) => {
   try {
     const { limit = '50', offset = '0', from, to } = req.query as Record<string, string>;
-    let q = `SELECT er.*, COALESCE(ic.name, er.camera_name) as cam_name, COALESCE(ic.location, er.location) as cam_location
+    let q = `SELECT er.*, COALESCE(ic.name, er.camera_name) as cam_name, COALESCE(ic.location_desc, er.location) as cam_location
       FROM employee_recognitions er
       LEFT JOIN ip_cameras ic ON ic.id = er.camera_id
       WHERE er.employee_id = $1`;
@@ -240,7 +240,7 @@ router.get('/location-report', auth, async (req: Request, res: Response) => {
       COALESCE(e.name, er.employee_name) as emp_name,
       e.department, e.photo_url as employee_photo,
       COALESCE(ic.name, er.camera_name) as cam_name,
-      COALESCE(ic.location, er.location) as cam_location
+      COALESCE(ic.location_desc, er.location) as cam_location
       FROM employee_recognitions er
       LEFT JOIN employees e ON e.id = er.employee_id
       LEFT JOIN ip_cameras ic ON ic.id = er.camera_id

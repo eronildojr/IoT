@@ -1995,8 +1995,10 @@ function IpCameraFormModal({
     )
   }
 
+  // backdrop z-[2000]: este modal embute um mapa Leaflet (.leaflet-map-pane vira
+  // camada GPU e pinta sobre z menor) — mantém modal/overlays acima do mapa.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" onClick={onClose}>
+    <div className="fixed inset-0 z-[2000] flex items-center justify-center p-4 bg-black/70" onClick={onClose}>
       <div className="bg-gray-900 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto border border-gray-700" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-gray-800">
           <h2 className="text-lg font-bold text-white">{editing ? 'Editar' : 'Nova'} Câmera IP</h2>
@@ -2514,7 +2516,7 @@ function EmployeesAlertsTab() {
     setSelectedEmployee(emp)
     setHistoryLoading(true)
     try {
-      const r = await fetch(`/api/employees-alerts/employees/${emp.id}/history`, { headers })
+      const r = await fetch(`/api/employees-alerts/employees/${emp.id}/recognitions`, { headers })
       const d = await r.json()
       setEmployeeHistory(Array.isArray(d) ? d : [])
     } catch (e) { console.error(e) }
@@ -2741,7 +2743,7 @@ function EmployeesAlertsTab() {
                           {rec.confidence && (
                             <div className="flex-shrink-0">
                               <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-300 rounded-full border border-green-500/20">
-                                {Math.round(rec.confidence * 100)}%
+                                {Math.round(rec.confidence)}%
                               </span>
                             </div>
                           )}

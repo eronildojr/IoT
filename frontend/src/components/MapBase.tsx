@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, ReactNode, CSSProperties } from 'react'
 import { APIProvider, Map, useMap } from '@vis.gl/react-google-maps'
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap as useLeafletMap } from 'react-leaflet'
+import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import 'leaflet/dist/leaflet.css'
 
 export type MapMarkerSpec = {

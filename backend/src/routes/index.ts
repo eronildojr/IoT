@@ -1768,7 +1768,7 @@ const HIK_TYPE_MAP: Record<string, string> = {
   VMD: 'motion', videoloss: 'tampering', tamperdetection: 'tampering', shelteralarm: 'tampering',
   linedetection: 'line_crossing', fielddetection: 'intrusion', regionEntrance: 'intrusion', regionExiting: 'intrusion',
   ANPR: 'lpr', vehicledetection: 'lpr', TrafficCar: 'lpr',
-  facedetection: 'face', facecapture: 'face', facelib: 'face',
+  facedetection: 'face', facecapture: 'face', facelib: 'face', faceSnap: 'face', FaceSnap: 'face', targetCaptureDetection: 'face', humanBodyDetection: 'person', loitering: 'intrusion',
 };
 const INT_CODE_MAP: Record<string, string> = {
   VideoMotion: 'motion', CrossLineDetection: 'line_crossing', CrossRegionDetection: 'intrusion',
@@ -1795,6 +1795,16 @@ function parseEventPayload(raw: Buffer, ct: string): { event_type: string; sever
         if (alert.facedetection || alert.FaceCapture) {
           const f = alert.facedetection || alert.FaceCapture;
           event_data.face_id = f.faceID; event_data.confidence = f.similarity;
+        }
+        // faceSnap — Hikvision iDS deep learning camera
+        if (alert.faceSnapPicture || alert.TargetCapture || alert.FaceSnapPicture) {
+          const fp = alert.faceSnapPicture || alert.TargetCapture || alert.FaceSnapPicture || {};
+          event_data.face_id = fp.FaceID || fp.faceID || fp.targetID;
+          event_data.confidence = fp.similarity || fp.Similarity;
+          if (fp.PersonInfo) {
+            event_data.person_name = fp.PersonInfo.name || fp.PersonInfo.Name;
+            event_data.person_uid = fp.PersonInfo.UID || fp.PersonInfo.uid;
+          }
         }
         const severity = ['intrusion', 'tampering'].includes(event_type) ? 'critical' : ['lpr', 'face'].includes(event_type) ? 'warning' : 'info';
         return { event_type, severity, occurred_at: isNaN(dt.getTime()) ? new Date() : dt, event_data };
@@ -1908,6 +1918,48 @@ router.post('/ip-cameras/:id/events/:token', (req: any, res, next) => {
       }
     });
 
+    // Employee recognition — link face events to employees
+    if (['face', 'unknown'].includes(parsed.event_type) || 
+        ['faceSnap', 'targetCaptureDetection', 'facedetection', 'facecapture'].includes(parsed.event_data?.raw_event_type || '')) {
+      setImmediate(async () => {
+        try {
+          const snapshotUrl = await (async () => {
+            const ev = await queryOne<any>('SELECT snapshot_url FROM ip_camera_events WHERE id=$1', [eventId]);
+            return ev?.snapshot_url || null;
+          })();
+          const camInfo = await queryOne<any>('SELECT name, location_desc FROM ip_cameras WHERE id=$1', [id]);
+          const personName = parsed.event_data?.person_name;
+          const confidence = parsed.event_data?.confidence ? parseFloat(String(parsed.event_data.confidence)) : null;
+          if (personName && personName.trim().length > 2) {
+            const emp = await queryOne<any>(
+              `SELECT id, name FROM employees WHERE active=true AND (name ILIKE $1 OR name ILIKE $2) LIMIT 1`,
+              [personName, `%${personName}%`]
+            );
+            if (emp) {
+              await query(
+                `INSERT INTO employee_recognitions (employee_id, employee_name, camera_id, camera_name, location, snapshot_url, confidence, recognized_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                [emp.id, emp.name, id, camInfo?.name || null, camInfo?.location_desc || null, snapshotUrl, confidence, parsed.occurred_at]
+              );
+              console.log(`[face-recog] Employee recognized: ${emp.name} (id=${emp.id}) at camera ${id}`);
+            } else {
+              await query(
+                `INSERT INTO employee_recognitions (employee_id, employee_name, camera_id, camera_name, location, snapshot_url, confidence, recognized_at) VALUES (NULL,$1,$2,$3,$4,$5,$6,$7)`,
+                [personName, id, camInfo?.name || null, camInfo?.location_desc || null, snapshotUrl, confidence, parsed.occurred_at]
+              );
+              console.log(`[face-recog] Unknown person: ${personName} at camera ${id}`);
+            }
+          } else {
+            await query(
+              `INSERT INTO employee_recognitions (employee_id, employee_name, camera_id, camera_name, location, snapshot_url, confidence, recognized_at) VALUES (NULL,'Pessoa nao identificada',$1,$2,$3,$4,$5,$6)`,
+              [id, camInfo?.name || null, camInfo?.location_desc || null, snapshotUrl, confidence, parsed.occurred_at]
+            );
+            console.log(`[face-recog] Unidentified face at camera ${id}`);
+          }
+        } catch (e: any) {
+          console.error(`[face-recog] error event=${eventId}:`, e.message);
+        }
+      });
+    }
     return res.status(200).json({ ok: true, event_id: eventId });
   } catch (e: any) {
     console.error('[webhook] error:', e.message);
