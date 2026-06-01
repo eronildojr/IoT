@@ -1,0 +1,8 @@
+# Override para desenvolvimento LOCAL.
+# A maquina ja tem um PostgreSQL nativo na 5432 (postgresql@16-main), entao
+# expomos o Postgres do projeto na 5433 para evitar conflito de porta.
+# Carregado automaticamente pelo `docker compose`.
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5433:5432"

@@ -3,6 +3,7 @@ import { useAuth } from '../store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '../services/api'
 import { useState } from 'react'
+import SosWatcher from './SosWatcher'
 import {
   LayoutDashboard, Cpu, BookOpen, MapPin, Bell, Zap,
   BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route,
@@ -61,6 +62,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-gray-950 overflow-hidden">
+      <SosWatcher />
       {open && <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setOpen(false)} />}
 
       <aside className={`fixed lg:static inset-y-0 left-0 z-30 w-64 bg-gray-900 border-r border-gray-800 flex flex-col transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>

@@ -18,6 +18,7 @@ import facialExtendedRoutes from './routes/facial_extended';
 import employeesAlertsRoutes from './routes/employees_alerts';
 import { startChirpstackBridge, getChirpstackBridgeStatus } from './services/chirpstackBridge';
 import { startFacePolling } from './services/facePolling';
+import { startMqttIngestor } from './services/mqttIngestor';
 
 dotenv.config();
 
@@ -108,6 +109,12 @@ runMigrations().then(() => {
     startChirpstackBridge();
   } catch (err) {
     console.error('[ChirpStack Bridge] Falha ao iniciar:', err);
+  }
+  // Iniciar ingestor MQTT genérico (assina brokers configurados por dispositivo)
+  try {
+    startMqttIngestor();
+  } catch (err) {
+    console.error('[MQTT Ingestor] Falha ao iniciar:', err);
   }
   // Iniciar polling de reconhecimento facial das câmeras Hikvision
   try {

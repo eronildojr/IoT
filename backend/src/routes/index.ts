@@ -205,14 +205,14 @@ router.get('/devices/:id', auth, async (req: Request, res: Response) => {
 });
 
 router.post('/devices', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
-  const { name, identifier, protocol, type = 'iot', modelId, location, config, tags, notes } = req.body;
+  const { name, identifier, protocol, communication = 'mqtt', type = 'iot', modelId, location, config, tags, notes } = req.body;
   if (!name || !identifier || !protocol) return res.status(400).json({ error: 'name, identifier e protocol são obrigatórios' });
   const tenant = await queryOne<any>('SELECT max_devices FROM tenants WHERE id=$1', [req.tenantId]);
   const cnt = await queryOne<any>('SELECT COUNT(*) as c FROM devices WHERE tenant_id=$1', [req.tenantId]);
   if (parseInt(cnt!.c) >= tenant!.max_devices) return res.status(403).json({ error: `Limite de ${tenant!.max_devices} dispositivos atingido` });
   try {
-    const d = await queryOne(`INSERT INTO devices(tenant_id,model_id,created_by,name,identifier,protocol,type,location,config,tags,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.tenantId, modelId || null, req.user!.id, name, identifier, protocol, type, location ? JSON.stringify(location) : null, JSON.stringify(config || {}), tags || [], notes || null]);
+    const d = await queryOne(`INSERT INTO devices(tenant_id,model_id,created_by,name,identifier,protocol,communication,type,location,config,tags,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [req.tenantId, modelId || null, req.user!.id, name, identifier, protocol, communication, type, location ? JSON.stringify(location) : null, JSON.stringify(config || {}), tags || [], notes || null]);
     return res.status(201).json(d);
   } catch (e: any) {
     if (e.code === '23505') return res.status(409).json({ error: 'Identificador já cadastrado' });
@@ -268,7 +268,14 @@ router.post('/devices/:id/connection/test', auth, requireRole('admin', 'operator
   if (!d) return res.status(404).json({ error: 'Não encontrado' });
   if (!d.connection_host) return res.status(400).json({ error: 'Dispositivo sem host configurado' });
   const net = await import('net');
-  const host = d.connection_host;
+  // O usuario pode digitar o host com esquema (wss://) e/ou path (/mqtt).
+  // Para o teste TCP precisamos apenas do hostname puro.
+  const host = String(d.connection_host)
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '') // remove esquema (wss://, mqtt://, http://...)
+    .split('/')[0]                            // remove path (/mqtt)
+    .split('?')[0]
+    .split(':')[0]                            // remove :porta embutida, se houver
+    .trim();
   const port = d.connection_port || 80;
   const start = Date.now();
   try {
@@ -3621,23 +3628,23 @@ router.get('/lorawan/devices', auth, async (req: Request, res: Response) => {
 
 // POST /lorawan/devices — criar/registrar dispositivo LoRaWAN manualmente
 router.post('/lorawan/devices', auth, requireRole('admin', 'operator'), async (req: Request, res: Response) => {
-  const { name, devEUI, appEUI, appKey, region, joinType = 'OTAA', notes, modelId } = req.body;
+  const { name, devEUI, appEUI, appKey, region, joinType = 'OTAA', communication = 'mqtt', notes, modelId } = req.body;
   if (!name || !devEUI) return res.status(400).json({ error: 'name e devEUI são obrigatórios' });
-  
+
   const devEUIClean = devEUI.toLowerCase().replace(/[^0-9a-f]/g, '');
   if (devEUIClean.length !== 16) return res.status(400).json({ error: 'DevEUI deve ter 16 caracteres hex' });
-  
+
   try {
     const d = await queryOne<any>(
       `INSERT INTO devices(
-        tenant_id, model_id, created_by, name, identifier, protocol, type,
+        tenant_id, model_id, created_by, name, identifier, protocol, communication, type,
         lorawan_dev_eui, lorawan_app_eui, lorawan_app_key,
         lorawan_join_type, lorawan_region, notes, tags, status
-      ) VALUES($1,$2,$3,$4,$5,'lorawan','iot',$6,$7,$8,$9,$10,$11,$12,'offline')
+      ) VALUES($1,$2,$3,$4,$5,'lorawan',$6,'iot',$7,$8,$9,$10,$11,$12,$13,'offline')
       RETURNING *`,
       [
         req.tenantId, modelId || null, req.user!.id,
-        name, `lorawan_${devEUIClean}`,
+        name, `lorawan_${devEUIClean}`, communication,
         devEUIClean, appEUI || null, appKey || null,
         joinType, region || 'EU868',
         notes || null, ['lorawan']
@@ -4039,8 +4046,8 @@ router.post('/devices/ingest/:identifier', async (req: Request, res: Response) =
   const d = await queryOne<any>('SELECT id, tenant_id FROM devices WHERE identifier=$1', [req.params.identifier]);
   if (!d) return res.status(404).json({ error: 'Dispositivo não encontrado' });
   const data = req.body;
-  await query('INSERT INTO device_telemetry(device_id, tenant_id, data) VALUES($1,$2,$3)', [d.id, d.tenant_id, JSON.stringify(data)]);
-  await query('UPDATE devices SET last_seen_at=NOW(), status=$1, updated_at=NOW() WHERE id=$2', ['online', d.id]);
+  await query('INSERT INTO telemetry(device_id, tenant_id, data) VALUES($1,$2,$3)', [d.id, d.tenant_id, JSON.stringify(data)]);
+  await query(`UPDATE devices SET last_seen_at=NOW(), last_telemetry=$1, status='online', updated_at=NOW() WHERE id=$2`, [JSON.stringify(data), d.id]);
   return res.json({ ok: true, received_at: new Date().toISOString() });
 });
 
@@ -4056,7 +4063,34 @@ router.put('/devices/:id/mqtt-config', auth, requireRole('admin', 'operator'), a
 // Listar últimas telemetrias de um dispositivo
 router.get('/devices/:id/telemetry/latest', auth, async (req: Request, res: Response) => {
   const limit = parseInt(req.query.limit as string) || 20;
-  const rows: any[] = await query('SELECT data, received_at FROM device_telemetry WHERE device_id=$1 ORDER BY received_at DESC LIMIT $2', [req.params.id, limit]);
+  const rows: any[] = await query('SELECT data, timestamp AS received_at FROM telemetry WHERE device_id=$1 ORDER BY timestamp DESC LIMIT $2', [req.params.id, limit]);
   return res.json({ data: rows || [] });
+});
+
+// ===== Alertas SOS (botões de pânico) =====
+// Lista os acionamentos mais recentes do tenant (usado pelo "vigia" do frontend e pelo mapa).
+router.get('/sos-alerts', auth, async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const rows = await query(
+    `SELECT a.id, a.dev_eui, a.battery_level, a.latitude, a.longitude, a.triggered_at,
+            a.device_id, d.name AS device_name
+     FROM sos_alerts a LEFT JOIN devices d ON d.id = a.device_id
+     WHERE a.tenant_id = $1
+     ORDER BY a.id DESC LIMIT $2`,
+    [req.tenantId, limit]
+  );
+  return res.json(rows);
+});
+
+// Alertas SOS de um dispositivo específico
+router.get('/devices/:id/sos-alerts', auth, async (req: Request, res: Response) => {
+  const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+  const rows = await query(
+    `SELECT id, dev_eui, battery_level, latitude, longitude, triggered_at
+     FROM sos_alerts WHERE device_id = $1 AND tenant_id = $2
+     ORDER BY triggered_at DESC LIMIT $3`,
+    [req.params.id, req.tenantId, limit]
+  );
+  return res.json(rows);
 });
 
