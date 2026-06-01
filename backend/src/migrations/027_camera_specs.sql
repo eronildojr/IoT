@@ -1,0 +1,21 @@
+-- 027_camera_specs.sql
+ALTER TABLE ip_cameras
+  ADD COLUMN IF NOT EXISTS serial_number        VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS resolution           VARCHAR(40),
+  ADD COLUMN IF NOT EXISTS sensor_type          VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS lens_focal_length    VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS ir_range_m           INTEGER,
+  ADD COLUMN IF NOT EXISTS power_input          VARCHAR(120),
+  ADD COLUMN IF NOT EXISTS poe_standard         VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS ip_rating            VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS compression_codecs   VARCHAR(120),
+  ADD COLUMN IF NOT EXISTS special_features     TEXT,
+  ADD COLUMN IF NOT EXISTS network_protocols    TEXT,
+  ADD COLUMN IF NOT EXISTS dimensions_weight    VARCHAR(120),
+  ADD COLUMN IF NOT EXISTS operating_temp       VARCHAR(60),
+  ADD COLUMN IF NOT EXISTS camera_type          VARCHAR(60) DEFAULT 'Bullet',
+  ADD COLUMN IF NOT EXISTS field_of_view        VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS max_power_w          NUMERIC(6,2),
+  ADD COLUMN IF NOT EXISTS mac_address          VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS manufacture_date     VARCHAR(20),
+  ADD COLUMN IF NOT EXISTS summary_pt           TEXT;

@@ -1,0 +1,646 @@
+import { useState, useEffect } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { apiKeysApi, jimiApi, vpnApi, agentsApi } from '../services/api'
+import { useAuth } from '../store/auth'
+import { Settings as SettingsIcon, Key, Plus, Trash2, Copy, Check, X, Loader2, Eye, EyeOff, Radio, CheckCircle2, AlertTriangle, Shield } from 'lucide-react'
+
+export default function Settings() {
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const [tab, setTab] = useState<'profile' | 'api' | 'jimi' | 'vpn' | 'agents'>('profile')
+  const [newKeyName, setNewKeyName] = useState('')
+  const [createdKey, setCreatedKey] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
+
+  const { data: apiKeys = [] } = useQuery({ queryKey: ['api-keys'], queryFn: () => apiKeysApi.list().then(r => r.data) })
+
+  const createKey = useMutation({
+    mutationFn: (d: any) => apiKeysApi.create(d),
+    onSuccess: (r) => { setCreatedKey(r.data.key); qc.invalidateQueries({ queryKey: ['api-keys'] }); setNewKeyName('') },
+  })
+  const delKey = useMutation({
+    mutationFn: (id: string) => apiKeysApi.delete(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['api-keys'] }),
+  })
+
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="page-header">
+        <h1 className="page-title">Configurações</h1>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-900 border border-gray-800 rounded-lg p-1 w-fit">
+        {([['profile', 'Perfil'], ['api', 'API Keys'], ['jimi', 'JIMI IoT Hub'], ['vpn', 'VPN'], ['agents', 'Agentes WF']] as const).map(([t, label]) => (
+          <button key={t} onClick={() => setTab(t as any)} className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${tab === t ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-gray-500 hover:text-gray-300'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'profile' && (
+        <div className="space-y-4 max-w-lg">
+          <div className="card p-6 space-y-4">
+            <h3 className="font-semibold text-white">Informações da Conta</h3>
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                { label: 'Nome', value: user?.name },
+                { label: 'E-mail', value: user?.email },
+                { label: 'Organização', value: user?.tenantName },
+                { label: 'Perfil', value: user?.role },
+                { label: 'Plano', value: user?.plan },
+              ].map(({ label, value }) => (
+                <div key={label}>
+                  <p className="text-xs text-gray-500 mb-1">{label}</p>
+                  <p className="text-gray-200 font-medium">{value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="card p-6">
+            <h3 className="font-semibold text-white mb-4">Documentação da API</h3>
+            <div className="space-y-3 text-sm text-gray-400">
+              <p>Use as API Keys para integrar dispositivos e sistemas externos com a plataforma.</p>
+              <div className="bg-gray-800 rounded-lg p-4 font-mono text-xs space-y-2">
+                <p className="text-gray-500"># Enviar telemetria de um dispositivo</p>
+                <p className="text-cyan-400">POST /api/devices/:deviceId/telemetry</p>
+                <p className="text-gray-500">Authorization: Bearer {'<sua-api-key>'}</p>
+                <p className="text-gray-300">{'{"data": {"temperature": 25.5, "humidity": 60}}'}</p>
+              </div>
+              <div className="bg-gray-800 rounded-lg p-4 font-mono text-xs space-y-2">
+                <p className="text-gray-500"># Listar dispositivos</p>
+                <p className="text-cyan-400">GET /api/devices</p>
+                <p className="text-gray-500">Authorization: Bearer {'<sua-api-key>'}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === 'api' && (
+        <div className="space-y-4 max-w-2xl">
+          {/* Criar nova key */}
+          <div className="card p-5">
+            <h3 className="font-semibold text-white mb-4 flex items-center gap-2"><Key size={16} className="text-cyan-400" /> Criar Nova API Key</h3>
+            <div className="flex gap-3">
+              <input value={newKeyName} onChange={e => setNewKeyName(e.target.value)} placeholder="Nome da key (ex: Sensor Sala A)" className="input flex-1" />
+              <button onClick={() => createKey.mutate({ name: newKeyName })} disabled={!newKeyName || createKey.isPending} className="btn-primary flex items-center gap-2 flex-shrink-0">
+                {createKey.isPending ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />} Criar
+              </button>
+            </div>
+
+            {createdKey && (
+              <div className="mt-4 bg-green-500/10 border border-green-500/30 rounded-lg p-4">
+                <p className="text-green-400 text-sm font-semibold mb-2">✓ API Key criada! Copie agora — não será exibida novamente.</p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 text-xs font-mono text-gray-300 bg-gray-800 rounded px-3 py-2 break-all">{createdKey}</code>
+                  <button onClick={() => copy(createdKey)} className="p-2 text-gray-400 hover:text-green-400 transition-colors flex-shrink-0">
+                    {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
+                  </button>
+                </div>
+                <button onClick={() => setCreatedKey(null)} className="text-xs text-gray-500 hover:text-gray-400 mt-2">Fechar</button>
+              </div>
+            )}
+          </div>
+
+          {/* Lista de keys */}
+          <div className="card overflow-hidden">
+            <div className="p-4 border-b border-gray-800">
+              <h3 className="font-semibold text-white text-sm">{apiKeys.length} API Keys ativas</h3>
+            </div>
+            {apiKeys.length === 0 ? (
+              <div className="p-8 text-center text-gray-600">
+                <Key size={28} className="mx-auto mb-2 opacity-30" />
+                <p className="text-sm">Nenhuma API key criada</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-800">
+                {apiKeys.map((k: any) => (
+                  <div key={k.id} className="flex items-center gap-4 px-5 py-3">
+                    <Key size={16} className="text-gray-600 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-200 text-sm">{k.name}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <code className="text-xs font-mono text-gray-500">
+                          {showKeys[k.id] ? k.key_prefix : `${k.key_prefix?.substring(0, 12)}...`}
+                        </code>
+                        <button onClick={() => setShowKeys(p => ({ ...p, [k.id]: !p[k.id] }))} className="text-gray-600 hover:text-gray-400">
+                          {showKeys[k.id] ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-0.5">Criada: {new Date(k.created_at).toLocaleDateString('pt-BR')} · Último uso: {k.last_used_at ? new Date(k.last_used_at).toLocaleDateString('pt-BR') : 'Nunca'}</p>
+                    </div>
+                    <button onClick={() => { if (confirm('Revogar esta API key?')) delKey.mutate(k.id) }} className="p-1.5 text-gray-600 hover:text-red-400 transition-colors"><Trash2 size={14} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'jimi' && <JimiConfigTab />}
+      {tab === 'vpn' && <VpnTab />}
+      {tab === 'agents' && <AgentsTab />}
+    </div>
+  )
+}
+
+// ══ JIMI IoT Hub Config Tab ══
+function JimiConfigTab() {
+  const qc = useQueryClient()
+  const [form, setForm] = useState({ hubBaseUrl: '', pushToken: '', apiKey: '', apiSecret: '', fileStorageUrl: '', openApiUrl: '', appKey: '', appSecret: '', accessToken: '', jimiAccount: '' })
+  const [loaded, setLoaded] = useState(false)
+  const [testResult, setTestResult] = useState<any>(null)
+  const [saving, setSaving] = useState(false)
+
+  const { data: cfg } = useQuery({
+    queryKey: ['jimi-config'],
+    queryFn: () => jimiApi.config().then(r => r.data),
+  })
+
+  // Load config into form once
+  if (cfg && !loaded) {
+    setForm({
+      hubBaseUrl: cfg.hub_base_url || '',
+      pushToken: '',
+      apiKey: '',
+      apiSecret: '',
+      fileStorageUrl: cfg.file_storage_url || '',
+      openApiUrl: cfg.open_api_url || 'https://eu-open.tracksolidpro.com/route/rest',
+      appKey: '',
+      appSecret: '',
+      accessToken: '',
+      jimiAccount: cfg.jimi_account || '',
+    })
+    setLoaded(true)
+  }
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await jimiApi.saveConfig(form)
+      qc.invalidateQueries({ queryKey: ['jimi-config'] })
+      alert('Configuração salva!')
+    } catch (err: any) { alert(err.response?.data?.error || 'Erro ao salvar') }
+    finally { setSaving(false) }
+  }
+
+  const test = async () => {
+    setTestResult(null)
+    try {
+      const { data } = await jimiApi.testConfig()
+      setTestResult(data)
+    } catch { setTestResult({ ok: false, error: 'Falha no teste' }) }
+  }
+
+  const pushUrl = 'https://104.237.5.59/api/jimi'
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-6 space-y-5">
+        <div className="flex items-center gap-3 mb-2">
+          <Radio className="text-orange-400" size={24} />
+          <div>
+            <h3 className="text-lg font-bold text-white">JIMI IoT Hub</h3>
+            <p className="text-gray-500 text-xs">Integração push-based com câmeras veiculares JIMI JC400D</p>
+          </div>
+          {cfg?.configured && <span className="ml-auto px-2 py-0.5 bg-green-500/15 text-green-400 border border-green-500/20 rounded-full text-xs">Configurado</span>}
+        </div>
+
+        {/* === OPEN API (TrackSolid) === */}
+        <div className="border-t border-gray-700 pt-4">
+          <h4 className="text-sm font-semibold text-cyan-400 mb-3">Open API (TrackSolid Pro) — Live Stream</h4>
+        </div>
+
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Open API URL</label>
+          <input value={form.openApiUrl} onChange={e => setForm({ ...form, openApiUrl: e.target.value })} placeholder="https://eu-open.tracksolidpro.com/route/rest" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">App Key *</label>
+            <input value={form.appKey} onChange={e => setForm({ ...form, appKey: e.target.value })} placeholder={cfg?.app_key || 'appKey da JIMI'} className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">App Secret *</label>
+            <input value={form.appSecret} onChange={e => setForm({ ...form, appSecret: e.target.value })} placeholder={cfg?.app_secret || 'appSecret'} type="password" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Conta JIMI (user_id)</label>
+            <input value={form.jimiAccount} onChange={e => setForm({ ...form, jimiAccount: e.target.value })} placeholder="email ou user_id" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          </div>
+          <div>
+            <label className="block text-sm text-gray-400 mb-1">Access Token</label>
+            <input value={form.accessToken} onChange={e => setForm({ ...form, accessToken: e.target.value })} placeholder={cfg?.has_access_token ? '(salvo)' : 'token OAuth'} className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+            <p className="text-xs text-gray-600 mt-1">Obtido via jimi.oauth.token.get (expira em 2h)</p>
+          </div>
+        </div>
+
+        {cfg?.has_open_api && <p className="text-xs text-green-400">Open API configurada</p>}
+
+        {/* === IOT HUB === */}
+        <div className="border-t border-gray-700 pt-4">
+          <h4 className="text-sm font-semibold text-orange-400 mb-3">IoT Hub — Push + Comandos</h4>
+        </div>
+
+        {/* Hub Base URL */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">URL Base do IoT Hub</label>
+          <input value={form.hubBaseUrl} onChange={e => setForm({ ...form, hubBaseUrl: e.target.value })} placeholder="https://xxx.jimicloud.com" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          <p className="text-xs text-gray-600 mt-1">Fornecida pela JIMI ao contratar o IoT Hub</p>
+        </div>
+
+        {/* Push Token */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Push Token *</label>
+          <input value={form.pushToken} onChange={e => setForm({ ...form, pushToken: e.target.value })} placeholder={cfg?.push_token || 'Token para validar dados recebidos'} className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          <p className="text-xs text-gray-600 mt-1">Token de seguranca configurado no JIMI Hub (http.pushToken)</p>
+        </div>
+
+        {/* API Key */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">API Key (Request APIs) *</label>
+          <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder={cfg?.api_key || 'Token para enviar comandos'} className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+        </div>
+
+        {/* API Secret */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">API Secret</label>
+          <input value={form.apiSecret} onChange={e => setForm({ ...form, apiSecret: e.target.value })} placeholder={cfg?.api_secret || 'Secret (opcional)'} type="password" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+        </div>
+
+        {/* Push URL (readonly) */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Push URL do nosso servidor (configurar no JIMI Hub)</label>
+          <div className="flex gap-2">
+            <input readOnly value={pushUrl} className="flex-1 px-4 py-2.5 bg-gray-900/50 border border-gray-600 rounded-xl text-cyan-400 text-sm font-mono cursor-default" />
+            <button onClick={() => navigator.clipboard.writeText(pushUrl)} className="px-3 py-2.5 bg-gray-700 hover:bg-gray-600 rounded-xl"><Copy size={14} className="text-gray-300" /></button>
+          </div>
+        </div>
+
+        {/* File Storage URL */}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">File Storage URL (dvr-upload)</label>
+          <input value={form.fileStorageUrl} onChange={e => setForm({ ...form, fileStorageUrl: e.target.value })} placeholder="https://xxx.jimicloud.com/dvr-upload" className="w-full px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none font-mono" />
+          <p className="text-xs text-gray-600 mt-1">URL base para acessar fotos/videos das câmeras</p>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-3 pt-2">
+          <button onClick={save} disabled={saving} className="flex items-center gap-2 px-6 py-2.5 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-50 text-white rounded-xl font-medium text-sm transition-all">
+            {saving ? <Loader2 size={14} className="animate-spin" /> : null} Salvar
+          </button>
+          <button onClick={test} className="flex items-center gap-2 px-6 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-xl font-medium text-sm transition-all">
+            Testar Conexão
+          </button>
+        </div>
+      </div>
+
+      {/* Test Result */}
+      {testResult && (
+        <div className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-5 space-y-3">
+          <h4 className="font-semibold text-white flex items-center gap-2">
+            {testResult.hub_reachable ? <CheckCircle2 size={16} className="text-green-400" /> : <AlertTriangle size={16} className="text-yellow-400" />}
+            Resultado do Teste
+          </h4>
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <Check2 label="Hub configurado" ok={testResult.hub_configured} />
+            <Check2 label="Push Token definido" ok={testResult.push_token_set} />
+            <Check2 label="API Key definida" ok={testResult.api_key_set} />
+            <Check2 label="File Storage" ok={testResult.file_storage_set} />
+            <Check2 label="Hub acessível" ok={testResult.hub_reachable} />
+          </div>
+          {testResult.push_endpoints && (
+            <div className="mt-3">
+              <p className="text-xs text-gray-500 mb-2">Push Endpoints ativos ({testResult.push_endpoints.length}):</p>
+              <div className="grid grid-cols-2 gap-1 max-h-40 overflow-y-auto">
+                {testResult.push_endpoints.map((ep: any) => (
+                  <span key={ep.endpoint} className="text-xs text-green-400 font-mono">{ep.endpoint}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Setup Guide */}
+      <div className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-5 space-y-3">
+        <h4 className="font-semibold text-white">Guia de Configuração no JIMI Hub</h4>
+        <div className="space-y-2 text-sm text-gray-400">
+          <p><strong className="text-gray-300">Passo 1:</strong> No painel do JIMI IoT Hub, configurar:</p>
+          <div className="bg-gray-900 rounded-lg p-3 font-mono text-xs text-cyan-400">
+            pushURL: {pushUrl}<br/>
+            pushToken: [o token configurado acima]
+          </div>
+          <p><strong className="text-gray-300">Passo 2:</strong> O JIMI Hub enviará dados automaticamente para:</p>
+          <div className="bg-gray-900 rounded-lg p-3 font-mono text-xs text-gray-400 space-y-0.5">
+            {['pushevent (login/logout)', 'pushhb (heartbeat)', 'pushgps (GPS)', 'pushalarm (alarmes)',
+              'pushfileupload (arquivos)', 'pushIothubEvent (eventos)', 'uploadCallback (DVR callback)'].map(ep => (
+              <div key={ep}>POST {pushUrl}/{ep.split(' ')[0]}</div>
+            ))}
+          </div>
+          <p><strong className="text-gray-300">Passo 3:</strong> Cadastre os dispositivos JIMI pelo IMEI na aba Câmeras</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Check2({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <span className={`flex items-center gap-1.5 ${ok ? 'text-green-400' : 'text-gray-500'}`}>
+      {ok ? <CheckCircle2 size={12} /> : <X size={12} />} {label}
+    </span>
+  )
+}
+
+// ══ VPN Tab ══
+function VpnTab() {
+  const [tunnels, setTunnels] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [editTunnel, setEditTunnel] = useState<any>(null)
+  const [formName, setFormName] = useState('')
+  const [formConf, setFormConf] = useState('')
+  const [formEnabled, setFormEnabled] = useState(true)
+  const [formNotes, setFormNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  async function refresh() {
+    try {
+      const { data } = await vpnApi.list()
+      setTunnels(Array.isArray(data) ? data : [])
+    } catch {} finally { setLoading(false) }
+  }
+
+  useEffect(() => {
+    refresh()
+    const i = setInterval(refresh, 5000)
+    return () => clearInterval(i)
+  }, [])
+
+  function openNew() {
+    setEditTunnel(null); setFormName(''); setFormConf(''); setFormEnabled(true); setFormNotes(''); setFormError(null); setShowForm(true)
+  }
+  function openEdit(t: any) {
+    setEditTunnel(t); setFormName(t.name); setFormConf(''); setFormEnabled(t.enabled); setFormNotes(t.notes || ''); setFormError(null); setShowForm(true)
+  }
+  function closeForm() { setShowForm(false); setEditTunnel(null) }
+
+  async function handleSave() {
+    setSaving(true); setFormError(null)
+    try {
+      const payload: any = { name: formName, enabled: formEnabled, notes: formNotes || null }
+      if (formConf.trim()) payload.conf_text = formConf
+      if (editTunnel) await vpnApi.update(editTunnel.id, payload)
+      else await vpnApi.create({ name: formName, conf_text: formConf, enabled: formEnabled, notes: formNotes || null })
+      closeForm(); refresh()
+    } catch (e: any) {
+      setFormError(e.response?.data?.message || e.response?.data?.error || e.message)
+    } finally { setSaving(false) }
+  }
+
+  async function handleDelete(t: any) {
+    if (!confirm(`Excluir VPN "${t.name}"?`)) return
+    try { await vpnApi.delete(t.id); refresh() }
+    catch (e: any) { alert(e.response?.data?.error || e.message) }
+  }
+
+  async function handleToggle(t: any) {
+    try { await vpnApi.update(t.id, { enabled: !t.enabled }); refresh() }
+    catch (e: any) { alert(e.response?.data?.error || e.message) }
+  }
+
+  const fmtBytes = (b: number) => {
+    if (!b || b < 1024) return `${b || 0} B`
+    if (b < 1024**2) return `${(b/1024).toFixed(1)} KB`
+    if (b < 1024**3) return `${(b/1024**2).toFixed(1)} MB`
+    return `${(b/1024**3).toFixed(1)} GB`
+  }
+  const fmtAge = (iso: string | null) => {
+    if (!iso) return '—'
+    const ms = Date.now() - new Date(iso).getTime()
+    if (ms < 60000) return `${Math.round(ms/1000)}s atrás`
+    if (ms < 3600000) return `${Math.round(ms/60000)}min atrás`
+    return `${Math.round(ms/3600000)}h atrás`
+  }
+
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="font-semibold text-white flex items-center gap-2"><Shield size={18} className="text-cyan-400" /> VPN WireGuard</h3>
+          <p className="text-gray-500 text-sm mt-1">Tunnels pra alcançar câmeras em redes privadas de clientes</p>
+        </div>
+        <button onClick={openNew} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-xl font-medium text-sm">
+          <Plus size={14} /> Nova VPN
+        </button>
+      </div>
+
+      {loading && <div className="flex justify-center py-8"><Loader2 className="animate-spin text-cyan-400" /></div>}
+
+      {!loading && tunnels.length === 0 && (
+        <div className="text-center py-12 text-gray-500 border border-dashed border-gray-700 rounded-xl">Nenhuma VPN cadastrada.</div>
+      )}
+
+      <div className="space-y-3">
+        {tunnels.map(t => {
+          const dot = t.status === 'up' ? 'bg-green-500' : t.status === 'pending' ? 'bg-yellow-500 animate-pulse' : t.status === 'error' ? 'bg-red-500' : 'bg-gray-500'
+          return (
+            <div key={t.id} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-4">
+              <div className="flex justify-between items-start gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${dot}`} />
+                    <span className="font-medium text-white">{t.name}</span>
+                    <span className="text-xs text-gray-500 font-mono">{t.interface_name}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full border ${t.status === 'up' ? 'text-green-400 border-green-500/30 bg-green-500/10' : t.status === 'error' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-gray-400 border-gray-600 bg-gray-700/50'}`}>{t.status}</span>
+                    {!t.enabled && <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400">desativado</span>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs text-gray-400">
+                    <div>Endpoint: <span className="text-gray-200">{t.endpoint || '—'}</span></div>
+                    <div>IP local: <span className="text-gray-200">{t.address || '—'}</span></div>
+                    <div>Ranges: <span className="text-gray-200">{(t.allowed_ips || []).join(', ') || '—'}</span></div>
+                    <div>Handshake: <span className="text-gray-200">{fmtAge(t.last_handshake_at)}</span></div>
+                    <div>↓ {fmtBytes(Number(t.bytes_rx))} · ↑ {fmtBytes(Number(t.bytes_tx))}</div>
+                    {t.last_status_check && <div>Atualizado: <span className="text-gray-200">{fmtAge(t.last_status_check)}</span></div>}
+                  </div>
+                  {t.last_error && <div className="mt-2 text-xs text-red-300 bg-red-500/10 px-2 py-1 rounded">⚠ {t.last_error}</div>}
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button onClick={() => openEdit(t)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-gray-200">Editar</button>
+                  <button onClick={() => handleToggle(t)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-gray-200">{t.enabled ? 'Desativar' : 'Ativar'}</button>
+                  <button onClick={() => handleDelete(t)} className="text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 px-3 py-1 rounded">Excluir</button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Form modal */}
+      {showForm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={closeForm}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-800">
+              <h2 className="text-lg font-bold text-white">{editTunnel ? `Editar — ${editTunnel.name}` : 'Nova VPN'}</h2>
+              <button onClick={closeForm} className="p-2 hover:bg-gray-800 rounded-lg"><X size={20} className="text-gray-400" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Nome *</label>
+                <input value={formName} onChange={e => setFormName(e.target.value)} required minLength={2} maxLength={120}
+                  className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none" placeholder="Ex: Horsetech Produção" />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Config WireGuard (.conf) {editTunnel && '— vazio mantém a atual'}</label>
+                <textarea value={formConf} onChange={e => setFormConf(e.target.value)} required={!editTunnel}
+                  placeholder="[Interface]&#10;PrivateKey = ...&#10;Address = 10.0.0.10/32&#10;&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = vpn.example.com:51820&#10;AllowedIPs = 10.0.0.0/24"
+                  className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-xs font-mono h-48 focus:border-cyan-500/50 focus:outline-none" />
+                <p className="text-xs text-gray-600 mt-1">PostUp/PostDown serão substituídos automaticamente.</p>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Notas</label>
+                <textarea value={formNotes} onChange={e => setFormNotes(e.target.value)}
+                  className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm h-16 focus:border-cyan-500/50 focus:outline-none" />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" checked={formEnabled} onChange={e => setFormEnabled(e.target.checked)} /> Ativar imediatamente
+              </label>
+              {formError && <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">{formError}</div>}
+              <div className="flex gap-3 pt-2">
+                <button onClick={closeForm} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium">Cancelar</button>
+                <button onClick={handleSave} disabled={saving || !formName || (!editTunnel && !formConf.trim())}
+                  className="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-30 text-white rounded-xl font-medium flex items-center justify-center gap-2">
+                  {saving && <Loader2 size={16} className="animate-spin" />} {editTunnel ? 'Salvar' : 'Criar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ══ Agents WF Tab ══
+function AgentsTab() {
+  const [agents, setAgents] = useState<any[]>([])
+  const [devices, setDevices] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+  const [editAgent, setEditAgent] = useState<any>(null)
+  const [formUser, setFormUser] = useState('')
+  const [formName, setFormName] = useState('')
+  const [formDevice, setFormDevice] = useState<number | ''>('')
+  const [formEnabled, setFormEnabled] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  async function refresh() {
+    try {
+      const [ag, dev] = await Promise.all([
+        agentsApi.list().then(r => Array.isArray(r.data) ? r.data : []),
+        agentsApi.traccarDevices().then(r => Array.isArray(r.data) ? r.data : []).catch(() => []),
+      ])
+      setAgents(ag); setDevices(dev)
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { refresh() }, [])
+
+  function openNew() { setEditAgent(null); setFormUser(''); setFormName(''); setFormDevice(''); setFormEnabled(true); setFormError(null); setShowForm(true) }
+  function openEdit(a: any) { setEditAgent(a); setFormUser(a.wf_username); setFormName(a.display_name||''); setFormDevice(a.traccar_device_id??''); setFormEnabled(a.enabled); setFormError(null); setShowForm(true) }
+
+  async function handleSave() {
+    setSaving(true); setFormError(null)
+    try {
+      const payload = { wf_username: formUser, display_name: formName||null, traccar_device_id: formDevice===''?null:Number(formDevice), enabled: formEnabled }
+      if (editAgent) await agentsApi.update(editAgent.id, payload)
+      else await agentsApi.create(payload)
+      setShowForm(false); refresh()
+    } catch (e: any) { setFormError(e.response?.data?.error || e.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="font-semibold text-white">Agentes WalkieFleet</h3>
+          <p className="text-gray-500 text-sm mt-1">Vincule usernames WF a devices Traccar pro despacho automático</p>
+        </div>
+        <button onClick={openNew} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded-xl font-medium text-sm"><Plus size={14} /> Novo</button>
+      </div>
+      {loading && <Loader2 className="animate-spin text-cyan-400" />}
+      {!loading && agents.length === 0 && <div className="text-center py-8 text-gray-500 border border-dashed border-gray-700 rounded-xl">Nenhum agente.</div>}
+      <div className="space-y-2">
+        {agents.map((ag: any) => {
+          const dev = devices.find((d: any) => d.id === ag.traccar_device_id)
+          return (
+            <div key={ag.id} className="bg-gray-800/50 border border-gray-700/50 rounded-xl p-3 flex justify-between items-center">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${ag.enabled?'bg-green-500':'bg-gray-500'}`}/>
+                  <span className="font-medium text-white">{ag.wf_username}</span>
+                  {ag.display_name && <span className="text-gray-400 text-sm">· {ag.display_name}</span>}
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  Traccar: {ag.traccar_device_id ? <span className="text-gray-300">{dev?.name||`#${ag.traccar_device_id}`} ({dev?.status||'?'})</span> : <span className="text-amber-400">não vinculado</span>}
+                </div>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={() => openEdit(ag)} className="text-xs bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-gray-200">Editar</button>
+                <button onClick={async () => { if(confirm(`Excluir ${ag.wf_username}?`)){await agentsApi.delete(ag.id);refresh()} }}
+                  className="text-xs bg-red-500/20 hover:bg-red-500/30 text-red-300 px-3 py-1 rounded">Excluir</button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {showForm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setShowForm(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-gray-800">
+              <h2 className="text-lg font-bold text-white">{editAgent?`Editar — ${editAgent.wf_username}`:'Novo agente'}</h2>
+              <button onClick={() => setShowForm(false)} className="p-2 hover:bg-gray-800 rounded-lg"><X size={20} className="text-gray-400" /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div><label className="block text-sm text-gray-400 mb-1">Username WF *</label>
+                <input value={formUser} onChange={e => setFormUser(e.target.value)} className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none" /></div>
+              <div><label className="block text-sm text-gray-400 mb-1">Nome</label>
+                <input value={formName} onChange={e => setFormName(e.target.value)} className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none" /></div>
+              <div><label className="block text-sm text-gray-400 mb-1">Device Traccar</label>
+                <select value={formDevice} onChange={e => setFormDevice(e.target.value===''?'':Number(e.target.value))}
+                  className="w-full px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-xl text-white text-sm focus:border-cyan-500/50 focus:outline-none appearance-none">
+                  <option value="">Nenhum</option>
+                  {devices.map((d: any) => <option key={d.id} value={d.id}>{d.name} (id={d.id}) — {d.status}</option>)}
+                </select></div>
+              <label className="flex items-center gap-2 text-sm text-gray-300">
+                <input type="checkbox" checked={formEnabled} onChange={e => setFormEnabled(e.target.checked)} /> Habilitado
+              </label>
+              {formError && <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">{formError}</div>}
+              <div className="flex gap-3 pt-2">
+                <button onClick={() => setShowForm(false)} className="flex-1 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl font-medium">Cancelar</button>
+                <button onClick={handleSave} disabled={saving||!formUser} className="flex-1 py-2.5 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-30 text-white rounded-xl font-medium">{saving?'Salvando…':'Salvar'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

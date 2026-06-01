@@ -41,6 +41,11 @@ export const devicesApi = {
   ingest: (id: string, data: any) => api.post(`/devices/${id}/telemetry`, { data }),
   setConnection: (id: string, d: any) => api.put(`/devices/${id}/connection`, d),
   testConnection: (id: string) => api.post(`/devices/${id}/connection/test`, {}),
+  mqttTopics: (id: string) => api.get(`/devices/${id}/mqtt-topics`),
+  sendCommand: (id: string, cmd: any) => api.post(`/devices/${id}/command`, cmd),
+  telemetryLatest: (id: string, limit?: number) => api.get(`/devices/${id}/telemetry/latest`, { params: { limit } }),
+  updateMqttConfig: (id: string, cfg: any) => api.put(`/devices/${id}/mqtt-config`, cfg),
+  listModels: (p?: any) => api.get("/device-models", { params: p }),
 }
 
 export const modelsApi = {
@@ -240,6 +245,31 @@ export const ipCamerasApi = {
   snapshotUrl: (id: number, bust = false) => `/api/ip-cameras/${id}/snapshot${bust ? '?t=' + Date.now() : ''}`,
 }
 
+export const whatsappApi = {
+  // Config / conexão / saúde
+  getConfig: () => api.get('/whatsapp/config'),
+  saveConfig: (d: any) => api.put('/whatsapp/config', d),
+  connection: () => api.get('/whatsapp/connection'),
+  aiHealth: () => api.get('/whatsapp/ai-health'),
+  // QR via <img>: o middleware auth aceita token por query param.
+  qrUrl: () => `/api/whatsapp/qr?token=${localStorage.getItem('iot_token') || ''}&t=${Date.now()}`,
+  // Categorias
+  categories: () => api.get('/whatsapp/categories'),
+  createCategory: (d: any) => api.post('/whatsapp/categories', d),
+  updateCategory: (id: number, d: any) => api.put(`/whatsapp/categories/${id}`, d),
+  deleteCategory: (id: number) => api.delete(`/whatsapp/categories/${id}`),
+  reembed: () => api.post('/whatsapp/categories/reembed', {}),
+  // Ocorrências
+  occurrences: (p?: any) => api.get('/whatsapp/occurrences', { params: p }),
+  pending: () => api.get('/whatsapp/occurrences/pending'),
+  occurrence: (id: number) => api.get(`/whatsapp/occurrences/${id}`),
+  assign: (id: number, wf_username: string) => api.post(`/whatsapp/occurrences/${id}/assign`, { wf_username }),
+  setCategory: (id: number, category_id: number | null) => api.put(`/whatsapp/occurrences/${id}/category`, { category_id }),
+  redispatch: (id: number) => api.post(`/whatsapp/occurrences/${id}/redispatch`, {}),
+  availableAgents: (occurrenceId?: number) =>
+    api.get('/whatsapp/agents/available', { params: occurrenceId ? { occurrenceId } : {} }),
+}
+
 export const diagnosticsApi = {
   health: () => api.get('/diagnostics/health'),
   cameras: () => api.get('/diagnostics/cameras'),
@@ -308,4 +338,20 @@ export interface MapOverview {
 
 export const mapApi = {
   overview: () => api.get<MapOverview>('/map/overview').then(r => r.data),
+}
+
+export interface SosAlert {
+  id: number
+  dev_eui: string | null
+  battery_level: number | null
+  latitude: number | null
+  longitude: number | null
+  triggered_at: string
+  device_id: string | null
+  device_name: string | null
+}
+
+export const sosApi = {
+  recent: (limit = 30) => api.get<SosAlert[]>('/sos-alerts', { params: { limit } }).then(r => r.data),
+  forDevice: (deviceId: string, limit = 50) => api.get<SosAlert[]>(`/devices/${deviceId}/sos-alerts`, { params: { limit } }).then(r => r.data),
 }

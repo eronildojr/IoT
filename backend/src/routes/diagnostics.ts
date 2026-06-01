@@ -3,6 +3,7 @@ import axios from 'axios';
 import { auth, requireRole } from '../middleware/auth';
 import { query, queryOne } from '../config/db';
 import * as shinobi from '../lib/shinobi-client';
+import { checkTraccarHealth } from '../services/traccarHealth';
 
 const router = Router();
 
@@ -26,28 +27,11 @@ async function checkPostgres(): Promise<HealthCheck> {
 }
 
 async function checkTraccar(tenantId: string): Promise<HealthCheck> {
-  const t = Date.now();
-  const cfg = await queryOne<any>(
-    'SELECT traccar_server_url, traccar_admin_user, traccar_admin_pass FROM tenants WHERE id=$1',
-    [tenantId],
-  );
-  if (!cfg?.traccar_server_url) {
-    return { name: 'Traccar', status: 'warn', detail: 'Não configurado neste tenant', latency_ms: null };
-  }
-  try {
-    const r = await axios.get(`${cfg.traccar_server_url.replace(/\/$/, '')}/api/server`, {
-      auth: { username: cfg.traccar_admin_user || 'admin', password: cfg.traccar_admin_pass || 'admin' },
-      timeout: 4000,
-    });
-    return {
-      name: 'Traccar',
-      status: 'ok',
-      detail: `Versão ${r.data?.version ?? '?'}`,
-      latency_ms: Date.now() - t,
-    };
-  } catch (e: any) {
-    return { name: 'Traccar', status: 'error', detail: (e.message || 'falha').slice(0, 120), latency_ms: null };
-  }
+  // Delega ao health check central (services/traccarHealth) que valida tanto
+  // /api/server quanto /api/devices com a credencial do tenant — evita o
+  // falso-positivo do antigo check que só batia em /api/server (público).
+  const h = await checkTraccarHealth(tenantId);
+  return { name: 'Traccar', status: h.status, detail: h.detail, latency_ms: h.latency_ms };
 }
 
 async function checkShinobi(): Promise<HealthCheck> {
@@ -99,7 +83,12 @@ router.get('/cameras', async (_req: Request, res: Response) => {
     SELECT id, name, manufacturer, model, ip_address, http_port, rtsp_port, rtsp_path,
            shinobi_monitor_id, active, updated_at
     FROM ip_cameras
-    ORDER BY id
+    ORDER BY
+      CASE
+        WHEN active = false THEN 3
+        ELSE 1
+      END,
+      name ASC
   `);
   const cameras = rows.map((row: any) => ({
     id: row.id,

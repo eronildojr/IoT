@@ -1,0 +1,33 @@
+[
+   {
+      "mid": "cam_13",
+      "ke": "GrpAtes2024IoT",
+      "name": "Camera01",
+      "shto": null,
+      "shfr": null,
+      "details": "{\"auto_host\":\"rtsp://10.0.251.111:554/Streaming/Channels/101\",\"rtsp_transport\":\"tcp\",\"sfps\":\"5\",\"stream_fps\":\"5\",\"stream_type\":\"hls\",\"hls_time\":\"2\",\"hls_list_size\":\"4\",\"stream_quality\":\"1\",\"snap\":\"1\",\"snap_fps\":\"1\",\"is_onvif\":\"no\",\"input_map_choices\":\"\",\"muser\":\"admin\",\"mpass\":\"ars2024@\"}",
+      "type": "h264",
+      "ext": "webm",
+      "protocol": "rtsp",
+      "host": "10.0.251.111",
+      "path": "/Streaming/Channels/101",
+      "port": 554,
+      "fps": 1,
+      "mode": "start",
+      "width": 640,
+      "height": 360,
+      "currentlyWatching": 0,
+      "currentCpuUsage": 0,
+      "status": "Watching",
+      "code": "2",
+      "snapshot": "/6523b5f55299858f06b23749ed8b1345/jpeg/GrpAtes2024IoT/cam_13/s.jpg",
+      "streams": [
+         "/6523b5f55299858f06b23749ed8b1345/hls/GrpAtes2024IoT/cam_13/s.m3u8"
+      ],
+      "streamsSortedByType": {
+         "hls": [
+            "/6523b5f55299858f06b23749ed8b1345/hls/GrpAtes2024IoT/cam_13/s.m3u8"
+         ]
+      }
+   }
+]

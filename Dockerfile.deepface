@@ -1,0 +1,33 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Instalar dependências do sistema (compatível com Debian Trixie/Bookworm)
+RUN apt-get update && apt-get install -y \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libgl1 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar dependências Python em etapas
+RUN pip install --no-cache-dir flask==3.0.0 requests pillow psycopg2-binary
+
+RUN pip install --no-cache-dir opencv-python-headless
+
+RUN pip install --no-cache-dir tf-keras
+
+RUN pip install --no-cache-dir deepface==0.0.93
+
+# Copiar o serviço
+COPY deepface_service.py /app/deepface_service.py
+
+# Pré-carregar modelo VGG-Face
+RUN python3 -c "from deepface import DeepFace; print('DeepFace OK')" || echo "Pre-load skipped"
+
+EXPOSE 5001
+
+CMD ["python3", "-u", "deepface_service.py"]

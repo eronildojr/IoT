@@ -1,0 +1,48 @@
+# AU915 region configuration (sub-band 0)
+[[regions]]
+  id = "au915_0"
+  description = "AU915 (sub-band 0)"
+  common_name = "AU915"
+  user_info = ""
+
+  [regions.gateway]
+    force_gws_private = false
+
+    [regions.gateway.backend]
+      enabled = "mqtt"
+
+      [regions.gateway.backend.mqtt]
+        topic_prefix = "au915_0"
+        share_name = "chirpstack"
+        server = "tcp://iot_mosquitto:1883"
+        username = "chirpstack"
+        password = "chirpstack2024"
+        qos = 0
+        clean_session = false
+        client_id = ""
+        ca_cert = ""
+        tls_cert = ""
+        tls_key = ""
+
+  [regions.network]
+    installation_margin = 10
+    rx_window = 0
+    rx1_delay = 1
+    rx1_dr_offset = 0
+    rx2_dr = 8
+    rx2_frequency = 923300000
+    rx2_prefer_on_rx1_dr_lt = 0
+    rx2_prefer_on_link_budget = false
+    downlink_tx_power = -1
+    adr_disabled = false
+    min_dr = 0
+    max_dr = 5
+    uplink_dwell_time_400ms = false
+    downlink_dwell_time_400ms = false
+    uplink_max_eirp = 0
+    rejoin_request_enabled = false
+    rejoin_request_max_count_n = 0
+    rejoin_request_max_time_n = 0
+    class_b_ping_slot_dr = 8
+    class_b_ping_slot_frequency = 923300000
+    enabled_uplink_channels = [0, 1, 2, 3, 4, 5, 6, 7]

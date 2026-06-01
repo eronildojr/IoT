@@ -10,8 +10,12 @@ import {
   Shield, Bell, FileText, Clock, ChevronRight, Layers, PenTool,
   Circle, Square, AlertTriangle, Play, StopCircle, Eye, Download, Pencil
 } from 'lucide-react'
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle as LCircle, Polygon, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Popup, Polyline, Circle as LCircle, Polygon, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
+import '../setupLeafletCluster' // expõe window.L = L ANTES do plugin (senão markerClusterGroup fica undefined)
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
+import 'leaflet.markercluster'
 import { BASE_LAYERS, useBaseLayer, BaseLayerToggle } from '../components/MapBase'
 import { MapErrorBoundary } from '../components/MapErrorBoundary'
 
@@ -24,16 +28,74 @@ const CATEGORY_ICONS: Record<string, string> = {
   person: '👤', bicycle: '🚲', animal: '🐾', default: '📍'
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  online: '#10b981', offline: '#6b7280', unknown: '#f59e0b'
-}
-
-const createIcon = (color: string, size = 14) => L.divIcon({
-  html: `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};border:2px solid white;box-shadow:0 0 8px ${color}"></div>`,
-  className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-})
-
 const knotsToKmh = (knots: number) => (knots * 1.852).toFixed(1)
+
+// ════════════════════════════════════════════════════════════
+// Markers agrupados (leaflet.markercluster) — evita "borrão" de
+// viaturas paradas no mesmo endereço. Cor reflete estado:
+// cinza=parado/congelado (frozen), verde=movendo, ciano=ativo.
+// ════════════════════════════════════════════════════════════
+function ClusteredMarkers({ devices, selectedId, onSelect }: {
+  devices: any[]
+  selectedId?: number
+  onSelect: (d: any) => void
+}) {
+  const map = useMap()
+  const layerRef = useRef<any>(null)
+
+  useEffect(() => {
+    if (!map) { console.log('CM_DBG no-map'); return }
+    const Lx = L as any
+    const _f = (devices || []).filter((d: any) => Number.isFinite(d.lat) && Number.isFinite(d.lng))
+    console.log('CM_DBG run devices=' + (devices || []).length + ' finite=' + _f.length + ' mcg=' + (typeof Lx.markerClusterGroup) + ' hasMap=' + !!map)
+    // cluster se o plugin carregou; senão LayerGroup simples (fallback p/ markers nunca sumirem)
+    if (!layerRef.current) {
+      layerRef.current = typeof Lx.markerClusterGroup === 'function'
+        ? Lx.markerClusterGroup({
+            maxClusterRadius: 40,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            disableClusteringAtZoom: 18,
+          })
+        : L.layerGroup()
+      map.addLayer(layerRef.current)
+    }
+    const grp = layerRef.current
+    grp.clearLayers()
+
+    devices
+      .filter((d: any) => Number.isFinite(d.lat) && Number.isFinite(d.lng))
+      .forEach((d: any) => {
+        const kmh = (d.speed || 0) * 1.852
+        const color = d.frozen ? '#64748b' : (kmh > 3 ? '#10b981' : '#06b6d4')
+        const sel = d.id === selectedId
+        const size = sel ? 22 : 16
+        const icon = L.divIcon({
+          className: '',
+          html: `<div style="background:${color};width:${size}px;height:${size}px;border-radius:50%;border:3px solid ${sel ? '#fbbf24' : '#fff'};box-shadow:0 2px 6px rgba(0,0,0,.4);"></div>`,
+          iconSize: [size, size],
+          iconAnchor: [size / 2, size / 2],
+        })
+        const mk = L.marker([d.lat, d.lng], { icon, title: d.name })
+        mk.on('click', () => onSelect(d))
+        if (d.name) {
+          mk.bindTooltip(`${d.name} — ${knotsToKmh(d.speed || 0)} km/h${d.frozen ? ' · parado' : ''}`)
+        }
+        grp.addLayer(mk)
+      })
+  }, [map, devices, selectedId, onSelect])
+
+  useEffect(() => {
+    return () => {
+      if (map && layerRef.current) {
+        map.removeLayer(layerRef.current)
+        layerRef.current = null
+      }
+    }
+  }, [map])
+
+  return null
+}
 const metersToKm = (m: number) => (m / 1000).toFixed(1)
 
 const timeAgo = (dateStr: string) => {
@@ -360,26 +422,12 @@ export default function Trackers() {
 
             {flyTarget && <FlyTo lat={flyTarget.lat} lng={flyTarget.lng} />}
 
-            {/* Device markers */}
-            {filteredDevices.map((d: any) => {
-              if (!d.lat || !d.lng) return null
-              const color = STATUS_COLORS[d.status] || STATUS_COLORS.unknown
-              return (
-                <Marker key={d.id} position={[d.lat, d.lng]} icon={createIcon(color, selected?.id === d.id ? 20 : 14)}
-                  eventHandlers={{ click: () => { setSelected(d); setFlyTarget({ lat: d.lat, lng: d.lng }) } }}>
-                  <Popup>
-                    <div className="text-sm min-w-[180px]">
-                      <p className="font-bold text-gray-800">{CATEGORY_ICONS[d.category] || '📍'} {d.name}</p>
-                      <p className="text-gray-600">IMEI: {d.uniqueId}</p>
-                      <p className="text-gray-600">Vel: {knotsToKmh(d.speed)} km/h</p>
-                      {d.ignition !== undefined && <p className="text-gray-600">Ignicao: {d.ignition ? '✓ Ligada' : '✗ Desligada'}</p>}
-                      {d.address && <p className="text-gray-500 text-xs mt-1">{d.address}</p>}
-                      <p className="text-gray-500 text-xs">{d.fixTime ? new Date(d.fixTime).toLocaleString('pt-BR') : 'Sem posicao'}</p>
-                    </div>
-                  </Popup>
-                </Marker>
-              )
-            })}
+            {/* Device markers (agrupados em cluster p/ evitar borrão de viaturas paradas) */}
+            <ClusteredMarkers
+              devices={filteredDevices}
+              selectedId={selected?.id}
+              onSelect={(d: any) => { setSelected(d); setFlyTarget({ lat: d.lat, lng: d.lng }) }}
+            />
 
             {/* Route polyline */}
             {routeData.length > 1 && (

@@ -136,15 +136,95 @@ export default function WalkieFleet() {
           break
 
         case 'sos:fired':
+          console.warn('[WF SOS] disparado:', data.payload)
+          // Auditoria dedicada (Prompt 26) + linha em messages para o feed
+          postEvent('/events/sos', data.payload || {})
           postEvent('/events/message', {
             direction: 'in',
-            jobId: `sos-${Date.now()}`,
+            jobId: data.payload?.callId || `sos-${Date.now()}`,
             conversationType: 'group',
             toGroupId: data.payload?.groupId ?? null,
             text: '🆘 SOS disparado',
             isSos: true,
             ts: data.payload?.ts ?? Date.now(),
           })
+          break
+
+        case 'sos:ended':
+          postEvent('/events/sos-end', data.payload || {})
+          break
+
+        case 'command:response':
+          postEvent('/events/command-response', data.payload || {})
+          break
+
+        case 'config:save':
+          (async () => {
+            try {
+              const r = await fetch('/api/walkiefleet/config', {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(data.payload || {}),
+              })
+              const body = await r.json().catch(() => ({}))
+              if (r.ok) {
+                sendToIframe('cmd:config-saved', { ok: true, changed: body.changed })
+                sendToIframe('cmd:reconnect', {})
+              } else {
+                sendToIframe('cmd:config-saved', { ok: false, error: body.error || `HTTP ${r.status}` })
+              }
+            } catch (err: any) {
+              sendToIframe('cmd:config-saved', { ok: false, error: err?.message || String(err) })
+            }
+          })()
+          break
+
+        case 'history:request':
+          (async () => {
+            const { conversationType, peerId, before } = data.payload || {}
+            try {
+              const qs = new URLSearchParams({
+                conversationType: conversationType || '',
+                peerId: peerId || '',
+                ...(before ? { before: String(before) } : {}),
+                limit: '50',
+              }).toString()
+              const r = await fetch(`/api/walkiefleet/messages/history?${qs}`, {
+                headers: { Authorization: `Bearer ${token}` },
+              })
+              const body = await r.json().catch(() => ({}))
+              sendToIframe('history:loaded', { conversationType, peerId, messages: body.messages || [] })
+            } catch (err) {
+              sendToIframe('history:loaded', { conversationType, peerId, messages: [], error: String(err) })
+            }
+          })()
+          break
+
+        case 'ptt:recording-ready':
+          (async () => {
+            try {
+              const { callId, durationMs, blob } = data.payload || {}
+              if (!blob || !callId) return
+              const fd = new FormData()
+              fd.append('audio', blob, `${callId}.wav`)
+              fd.append('callId', callId)
+              fd.append('durationMs', String(durationMs ?? ''))
+              const r = await fetch('/api/walkiefleet/recordings', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}` },
+                body: fd,
+              })
+              const body = await r.json().catch(() => ({}))
+              if (r.ok) console.log('[WF] recording uploaded:', body.url)
+              else console.error('[WF] recording upload erro:', body.error || r.status)
+            } catch (err) {
+              console.error('[WF] recording upload erro:', err)
+            }
+          })()
+          break
+
+        case 'memory:stats':
+          // telemetria de memória do iframe (Prompt 34) — apenas observabilidade
           break
 
         case 'error':
@@ -154,7 +234,46 @@ export default function WalkieFleet() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [agentParam, sendToIframe, postEvent])
+  }, [agentParam, sendToIframe, postEvent, token])
+
+  // Após o handshake, busca a config do tenant (com JWT) e injeta no iframe (Prompt 31)
+  useEffect(() => {
+    if (!bridgeReady || !token) return
+    ;(async () => {
+      try {
+        const r = await fetch('/api/walkiefleet/config', { headers: { Authorization: `Bearer ${token}` } })
+        if (!r.ok) return
+        const cfg = await r.json()
+        sendToIframe('cmd:set-config', {
+          wfServerHost: cfg.host ?? cfg.wfServerHost ?? '',
+          wfServerPort: cfg.port ?? cfg.wfServerPort ?? 5058,
+          wfDispatcherLogin: cfg.login ?? cfg.wfDispatcherLogin ?? '',
+          wfDispatcherPass: '', // nunca devolver a senha ao iframe
+        })
+      } catch (e) {
+        console.warn('[WF] falha ao buscar config', e)
+      }
+    })()
+  }, [bridgeReady, token, sendToIframe])
+
+  // Após o handshake, busca o grupo de emergência (alvo do SOS) e injeta no iframe (Prompt 26)
+  useEffect(() => {
+    if (!bridgeReady || !token) return
+    ;(async () => {
+      try {
+        const r = await fetch('/api/walkiefleet/groups/emergency', { headers: { Authorization: `Bearer ${token}` } })
+        const data = await r.json().catch(() => ({}))
+        if (data.group) {
+          sendToIframe('cmd:set-emergency-group', { groupId: data.group.groupId, groupName: data.group.name })
+        } else {
+          console.warn('[WF] Nenhum grupo Emergency configurado:', data.reason)
+          sendToIframe('cmd:set-emergency-group', { groupId: null, reason: data.reason || 'não configurado' })
+        }
+      } catch (e) {
+        console.error('[WF] erro buscando grupo Emergency:', e)
+      }
+    })()
+  }, [bridgeReady, token, sendToIframe])
 
   // Re-aplica deep-link se o parâmetro ?agent= mudar depois do bridge subir.
   useEffect(() => {

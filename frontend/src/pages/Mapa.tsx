@@ -2,9 +2,10 @@
 // L.marker, fitBounds) com layers e clusters customizados. Manter em Leaflet até
 // re-implementar com google.maps.Map e MarkerClusterer.
 import { useEffect, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { mapApi, MapOverview } from '../services/api'
+import { mapApi, MapOverview, sosApi } from '../services/api'
 import { BASE_LAYERS, useBaseLayer, BaseLayerToggle } from '../components/MapBase'
 import { MapErrorBoundary } from '../components/MapErrorBoundary'
 
@@ -31,6 +32,9 @@ export default function Mapa() {
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [activeLayer, setActiveLayer] = useBaseLayer()
+  const routerLocation = useLocation()
+  const sosBaselineRef = useRef<number | null>(null)
+  const sosSeenRef = useRef<Set<number>>(new Set())
 
   useEffect(() => {
     if (!mapRef.current || leafletRef.current) return
@@ -74,6 +78,55 @@ export default function Mapa() {
     const i = setInterval(refresh, REFRESH_MS)
     return () => { cancelled = true; clearInterval(i) }
   }, [])
+
+  // Mostra um alerta SOS no mapa: marcador + popup aberto, centraliza e some após 30s.
+  function showSosOnMap(a: { id?: number; latitude: any; longitude: any; device_name?: string | null; dev_eui?: string | null; battery_level?: any; triggered_at?: string }) {
+    const map = leafletRef.current
+    const lat = Number(a.latitude), lng = Number(a.longitude)
+    if (!map || !Number.isFinite(lat) || !Number.isFinite(lng)) return
+    const marker = L.marker([lat, lng], { icon: sosIcon(), zIndexOffset: 1000 })
+      .bindPopup(buildSosPopup(a), { maxWidth: 300, autoClose: false })
+      .addTo(map)
+    map.flyTo([lat, lng], Math.max(map.getZoom(), 16), { duration: 0.8 })
+    setTimeout(() => marker.openPopup(), 400)
+    // Remove o alerta do mapa após 30 segundos.
+    setTimeout(() => { try { map.removeLayer(marker) } catch { /* já removido */ } }, 30_000)
+  }
+
+  // Detecta novos acionamentos SOS enquanto o mapa está aberto.
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const alerts = await sosApi.recent(30)
+        if (cancelled || !alerts.length) return
+        const maxId = Math.max(...alerts.map(a => a.id))
+        if (sosBaselineRef.current === null) { sosBaselineRef.current = maxId; return } // 1a carga: não dispara
+        const novos = alerts
+          .filter(a => a.id > (sosBaselineRef.current as number) && !sosSeenRef.current.has(a.id))
+          .sort((a, b) => a.id - b.id)
+        if (novos.length) {
+          novos.forEach(a => { sosSeenRef.current.add(a.id); showSosOnMap(a) })
+          sosBaselineRef.current = maxId
+        }
+      } catch { /* silencioso */ }
+    }
+    poll()
+    const i = setInterval(poll, 6000)
+    return () => { cancelled = true; clearInterval(i) }
+  }, [])
+
+  // Foco vindo do pop-up "Ver no mapa" (quando o usuário não estava no mapa).
+  useEffect(() => {
+    const focus = (routerLocation.state as any)?.focus
+    if (!focus) return
+    if (focus.id) sosSeenRef.current.add(focus.id)
+    const t = setTimeout(() => showSosOnMap({
+      id: focus.id, latitude: focus.lat, longitude: focus.lng,
+      device_name: focus.label, battery_level: focus.battery, triggered_at: focus.triggered_at,
+    }), 500)
+    return () => clearTimeout(t)
+  }, [routerLocation.state])
 
   useEffect(() => {
     if (!data || !layersRef.current) return
@@ -206,6 +259,30 @@ function eventIcon(severity: string): L.DivIcon {
     iconSize: [28, 28], iconAnchor: [14, 14],
     html: `<div style="background:${color};border:2px solid white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;box-shadow:0 0 8px ${color};font-size:12px">🚨</div>`,
   })
+}
+
+function sosIcon(): L.DivIcon {
+  return L.divIcon({
+    className: 'custom-pin',
+    iconSize: [36, 36], iconAnchor: [18, 18],
+    html: `<div style="background:#ef4444;border:3px solid white;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 6px rgba(239,68,68,.35),0 0 12px #ef4444;font-size:16px">🆘</div>`,
+  })
+}
+
+function buildSosPopup(a: any): string {
+  const lat = Number(a.latitude), lng = Number(a.longitude)
+  const bat = a.battery_level != null ? `${escapeHtml(a.battery_level)}%` : '—'
+  return `
+    <div style="min-width:230px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:18px">🆘</span><strong style="color:#ef4444">ALERTA SOS</strong></div>
+      <div style="font-size:12px;color:#e2e8f0">${escapeHtml(a.device_name || 'Botão de pânico')}</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.6">
+        ${a.dev_eui ? 'DevEui: ' + escapeHtml(a.dev_eui) + '<br>' : ''}
+        Bateria: ${bat}<br>
+        ${Number.isFinite(lat) ? 'Local: ' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '<br>' : ''}
+        Acionado: ${a.triggered_at ? new Date(a.triggered_at).toLocaleString('pt-BR') : '—'}
+      </div>
+    </div>`
 }
 
 function escapeHtml(s: any): string {
