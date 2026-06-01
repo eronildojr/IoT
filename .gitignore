@@ -8,3 +8,4 @@ backups/
 *.bak-*
 backend/node_modules/
 frontend/node_modules/
+docker-compose.override.yml

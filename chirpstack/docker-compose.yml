@@ -1,0 +1,58 @@
+version: "3"
+
+services:
+  chirpstack:
+    image: chirpstack/chirpstack:4
+    container_name: chirpstack
+    command: -c /etc/chirpstack
+    restart: unless-stopped
+    volumes:
+      - /root/chirpstack/config:/etc/chirpstack
+    depends_on:
+      - chirpstack_redis
+    environment:
+      - MQTT_BROKER_HOST=iot_mosquitto
+      - REDIS_HOST=chirpstack_redis
+      - POSTGRESQL_HOST=iot_postgres
+    ports:
+      - "8090:8080"
+    networks:
+      - iotplatform_iot_network
+      - chirpstack_net
+
+  chirpstack_gateway_bridge:
+    image: chirpstack/chirpstack-gateway-bridge:4
+    container_name: chirpstack_gateway_bridge
+    restart: unless-stopped
+    ports:
+      - "1700:1700/udp"
+    environment:
+      - INTEGRATION__MQTT__EVENT_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/event/{{ .EventType }}
+      - INTEGRATION__MQTT__STATE_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/state/{{ .StateType }}
+      - INTEGRATION__MQTT__COMMAND_TOPIC_TEMPLATE=eu868/gateway/{{ .GatewayID }}/command/#
+      - INTEGRATION__MQTT__AUTH__GENERIC__SERVER=tcp://iot_mosquitto:1883
+      - INTEGRATION__MQTT__AUTH__GENERIC__USERNAME=chirpstack_gw
+      - INTEGRATION__MQTT__AUTH__GENERIC__PASSWORD=chirpstack2024
+    networks:
+      - iotplatform_iot_network
+      - chirpstack_net
+
+  chirpstack_redis:
+    image: redis:7-alpine
+    container_name: chirpstack_redis
+    restart: unless-stopped
+    command: redis-server --save 300 1 --save 60 100 --loglevel warning
+    volumes:
+      - chirpstack_redis_data:/data
+    networks:
+      - chirpstack_net
+
+volumes:
+  chirpstack_redis_data:
+
+networks:
+  iotplatform_iot_network:
+    external: true
+  chirpstack_net:
+    driver: bridge
+

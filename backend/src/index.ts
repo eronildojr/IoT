@@ -11,7 +11,14 @@ import routes from './routes';
 import routingRoutes from './routes/routing';
 import jimiRoutes from './routes/jimi';
 import diagnosticsRoutes from './routes/diagnostics';
-import { registerWalkieFleetWS } from './walkiefleet-ws';
+import whatsappRoutes from './routes/whatsapp';
+import analyticsRoutes from './routes/analytics';
+import facialRoutes from './routes/facial';
+import facialExtendedRoutes from './routes/facial_extended';
+import employeesAlertsRoutes from './routes/employees_alerts';
+import { startChirpstackBridge, getChirpstackBridgeStatus } from './services/chirpstackBridge';
+import { startFacePolling } from './services/facePolling';
+import { startMqttIngestor } from './services/mqttIngestor';
 
 dotenv.config();
 
@@ -58,15 +65,22 @@ app.use(express.urlencoded({ extended: true, limit: '10mb', type: 'application/x
 app.use('/snapshots', express.static(process.env.EVENT_SNAPSHOTS_DIR || '/app/data/event-snapshots', { maxAge: '7d', immutable: true }));
 
 // Rate limiting
-app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 20, message: { error: 'Muitas tentativas. Tente em 15 minutos.' } }));
-app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
-app.use(/^\/api\/(?!jimi\/push|jimi\/upload|ip-cameras\/\d+\/events\/)/, rateLimit({ windowMs: 60 * 1000, max: 300 }));
+// Login: estrito contra brute-force — 10 falhas/15min por IP (sucessos não contam).
+app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas tentativas de login. Tente em 15 minutos.' } }));
+app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas contas criadas. Tente em 1 hora.' } }));
+// Geral: 300 req/min por IP. Exclui webhooks de alta frequência (jimi push/upload, eventos de câmera IP).
+app.use(/^\/api\/(?!jimi\/push|jimi\/upload|ip-cameras\/\d+\/events\/)/, rateLimit({ windowMs: 60 * 1000, max: 300, standardHeaders: true, legacyHeaders: false, message: { error: 'Muitas requisições — tente novamente em instantes' } }));
 
 // Rotas
 app.use('/api', routes);
 app.use('/api/routing', routingRoutes);
 app.use('/api/jimi', jimiRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
+app.use('/api/whatsapp', whatsappRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/facial', facialRoutes);
+app.use('/api/facial', facialExtendedRoutes);
+app.use('/api/employees-alerts', employeesAlertsRoutes);
 
 // Start WalkieFleet message client
 import { wfClient } from './lib/wf-client';
@@ -90,12 +104,29 @@ app.use((err: any, _req: any, res: any, _next: any) => {
 
 // Rodar migrações e iniciar servidor
 runMigrations().then(() => {
+  // Iniciar bridge ChirpStack LoRaWAN
+  try {
+    startChirpstackBridge();
+  } catch (err) {
+    console.error('[ChirpStack Bridge] Falha ao iniciar:', err);
+  }
+  // Iniciar ingestor MQTT genérico (assina brokers configurados por dispositivo)
+  try {
+    startMqttIngestor();
+  } catch (err) {
+    console.error('[MQTT Ingestor] Falha ao iniciar:', err);
+  }
+  // Iniciar polling de reconhecimento facial das câmeras Hikvision
+  try {
+    setTimeout(() => startFacePolling(), 8000);
+    console.log('[FacePolling] Agendado para iniciar em 8s');
+  } catch (err) {
+    console.error('[FacePolling] Falha ao iniciar:', err);
+  }
+
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[IoT Platform] Backend rodando na porta ${PORT}`);
   });
-
-  // WalkieFleet WebSocket (PTT em tempo real)
-  registerWalkieFleetWS(server);
 
   // Graceful shutdown
   const shutdown = (signal: string) => {

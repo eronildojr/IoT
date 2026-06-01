@@ -51,11 +51,19 @@ services:
       JIMI_APP_SECRET: ${JIMI_APP_SECRET:-}
       JIMI_BASE_URL: ${JIMI_BASE_URL:-https://eu-open.tracksolidpro.com/route/rest}
       JIMI_ACCESS_TOKEN: ${JIMI_ACCESS_TOKEN:-}
+      CHIRPSTACK_MQTT_HOST: mosquitto
+      CHIRPSTACK_MQTT_PORT: 1883
+      CHIRPSTACK_DEFAULT_TENANT_ID: e2ce35be-666e-4e93-acef-ab07aa258941
       WF_BOT_ENABLED: ${WF_BOT_ENABLED:-false}
       WF_BOT_LOGIN: ${WF_BOT_LOGIN:-BOT_DISPATCH}
       WF_BOT_PASSWORD: ${WF_BOT_PASSWORD:-}
       WF_BOT_DEVICE_ID_FILE: ${WF_BOT_DEVICE_ID_FILE:-/var/groupates/wf_bot_device_id.txt}
       WF_RELAY_WS_URL: ws://groupates_walkiefleet:8070/ws
+      WHATSMIAU_API_KEY: ${WHATSMIAU_API_KEY:-}
+      WHATSMIAU_INSTANCE: ${WHATSMIAU_INSTANCE:-groupates_ocorrencias}
+      WA_WEBHOOK_SECRET: ${WA_WEBHOOK_SECRET:-}
+      AI_SERVICE_URL: ${AI_SERVICE_URL:-http://groupates_ai:8090}
+      WA_BOT_ENABLED: ${WA_BOT_ENABLED:-false}
     env_file:
       - /etc/groupates/shinobi.env
     depends_on:
@@ -70,6 +78,7 @@ services:
       - /etc/wireguard:/etc/wireguard
       - /run/wireguard:/run/wireguard
       - /var/groupates/event-snapshots:/app/data/event-snapshots
+      - /var/groupates/ptt-recordings:/var/groupates/ptt-recordings
     cap_add:
       - NET_ADMIN
     cap_drop:

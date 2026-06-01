@@ -11,27 +11,11 @@ const statusBadge: Record<string, string> = {
   online: 'badge-online', offline: 'badge-offline', warning: 'badge-warning', error: 'badge-error'
 }
 
-const PROTOCOL_PORTS: Record<string, number> = {
-  'mqtt': 1883, 'mqtts': 8883, 'http': 80, 'https': 443, 'tcp': 502,
-  'modbus': 502, 'lorawan': 1700, 'rtsp': 554, 'onvif': 80, 'telnet': 23,
-  'ftp': 21, 'ssh': 22, 'coap': 5683, 'amqp': 5672, 'opcua': 4840,
-}
-
-const PROTOCOL_DESCRIPTIONS: Record<string, string> = {
-  'mqtt': 'Protocolo de mensagens leve para IoT. Broker recebe dados do dispositivo.',
-  'tcp': 'Conexão TCP direta. Ideal para Modbus, PLCs e equipamentos industriais.',
-  'http': 'API REST HTTP. O dispositivo envia dados via POST para a plataforma.',
-  'lorawan': 'LoRaWAN via Network Server (TTN, Chirpstack). Porta 1700 UDP.',
-  'modbus': 'Modbus TCP/RTU para equipamentos industriais e medidores.',
-  'rtsp': 'Stream de vídeo RTSP para câmeras IP.',
-  'coap': 'CoAP - protocolo leve para dispositivos com recursos limitados.',
-}
-
 export default function DeviceDetail() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [activeTab, setActiveTab] = useState<'telemetry' | 'connection' | 'config'>('telemetry')
-  const [connForm, setConnForm] = useState({ host: '', port: '', protocol: 'mqtt', path: '/', topic: '', username: '', password: '' })
+  const [connForm, setConnForm] = useState({ host: '', port: '', protocol: '', path: '/', topic: '', username: '', password: '', isMqtt: false })
   const [testResult, setTestResult] = useState<{ success: boolean; message: string; latency?: number } | null>(null)
   const [testLoading, setTestLoading] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
@@ -42,14 +26,17 @@ export default function DeviceDetail() {
       const d = r.data
       // Pré-preencher form com dados existentes
       if (d.connection_host) {
+        const proto = d.connection_protocol || ''
+        const isMqtt = d.connection_config?.mqtt ?? proto.toLowerCase().startsWith('mqtt')
         setConnForm({
           host: d.connection_host || '',
           port: String(d.connection_port || ''),
-          protocol: d.connection_protocol || 'mqtt',
+          protocol: proto,
           path: d.connection_path || '/',
           topic: d.connection_config?.topic || '',
           username: d.connection_config?.username || '',
           password: d.connection_config?.password || '',
+          isMqtt,
         })
       }
       return d
@@ -67,10 +54,11 @@ export default function DeviceDetail() {
     mutationFn: () => devicesApi.setConnection(id!, {
       host: connForm.host,
       port: parseInt(connForm.port),
-      protocol: connForm.protocol,
+      protocol: connForm.protocol.trim(),
       path: connForm.path,
       config: {
-        topic: connForm.topic,
+        mqtt: connForm.isMqtt,
+        topic: connForm.isMqtt ? connForm.topic : '',
         username: connForm.username,
         password: connForm.password,
       }
@@ -95,11 +83,13 @@ export default function DeviceDetail() {
     }
   }
 
-  const handleProtocolChange = (proto: string) => {
+  const toggleMqtt = (checked: boolean) => {
     setConnForm(p => ({
       ...p,
-      protocol: proto,
-      port: String(PROTOCOL_PORTS[proto] || p.port),
+      isMqtt: checked,
+      // Sugere defaults de MQTT só quando o campo está vazio; o protocolo é texto livre nos dois casos
+      protocol: checked && !p.protocol.trim() ? 'mqtt' : p.protocol,
+      port: checked && !p.port ? '1883' : p.port,
     }))
   }
 
@@ -163,9 +153,10 @@ export default function DeviceDetail() {
       </div>
 
       {/* Info Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { label: 'Protocolo', value: device.protocol?.toUpperCase(), icon: Wifi, cls: 'text-cyan-400' },
+          { label: 'Conexão', value: device.protocol?.toUpperCase(), icon: Wifi, cls: 'text-cyan-400' },
+          { label: 'Comunicação', value: device.communication?.toUpperCase() || 'MQTT', icon: Network, cls: 'text-emerald-400' },
           { label: 'Tipo', value: device.type, icon: Cpu, cls: 'text-blue-400' },
           { label: 'Modelo', value: device.model_name || 'Custom', icon: Activity, cls: 'text-purple-400' },
           { label: 'Último contato', value: device.last_seen_at ? format(new Date(device.last_seen_at), 'dd/MM HH:mm', { locale: ptBR }) : 'Nunca', icon: Clock, cls: 'text-gray-400' },
@@ -326,28 +317,34 @@ export default function DeviceDetail() {
             <p className="text-gray-500 text-sm mb-5">Aponte o IP e porta do dispositivo para que a plataforma se comunique com ele.</p>
 
             <div className="space-y-4">
-              {/* Protocolo */}
-              <div>
-                <label className="label">Protocolo de Comunicação</label>
-                <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
-                  {['mqtt', 'tcp', 'http', 'modbus', 'lorawan', 'rtsp', 'coap', 'https', 'opcua', 'custom'].map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => handleProtocolChange(p)}
-                      className={`py-2 px-3 rounded-lg text-xs font-medium border transition-all ${
-                        connForm.protocol === p
-                          ? 'border-cyan-500 bg-cyan-500/10 text-cyan-400'
-                          : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-600'
-                      }`}
-                    >
-                      {p.toUpperCase()}
-                    </button>
-                  ))}
+              {/* Caixa de marcação MQTT */}
+              <label className="flex items-center gap-3 p-3 rounded-lg border border-gray-700 bg-gray-800 cursor-pointer hover:border-gray-600 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={connForm.isMqtt}
+                  onChange={e => toggleMqtt(e.target.checked)}
+                  className="w-4 h-4 accent-cyan-500"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-200">Conexão MQTT</p>
+                  <p className="text-xs text-gray-500">Marque se o dispositivo se comunica via broker MQTT. Caso contrário, informe o protocolo manualmente.</p>
                 </div>
-                {PROTOCOL_DESCRIPTIONS[connForm.protocol] && (
-                  <p className="text-gray-500 text-xs mt-2">{PROTOCOL_DESCRIPTIONS[connForm.protocol]}</p>
-                )}
+              </label>
+
+              {/* Tipo de conexão / protocolo: texto livre em qualquer caso */}
+              <div>
+                <label className="label">Tipo de Conexão / Protocolo *</label>
+                <input
+                  value={connForm.protocol}
+                  onChange={e => setConnForm(p => ({ ...p, protocol: e.target.value }))}
+                  className="input font-mono lowercase"
+                  placeholder={connForm.isMqtt ? 'Ex: mqtt, mqtts, ws, wss, http' : 'Ex: tcp, http, modbus, coap, opcua...'}
+                />
+                <p className="text-gray-500 text-xs mt-2">
+                  {connForm.isMqtt
+                    ? 'Esquema de transporte do MQTT (mqtt, mqtts, ws, wss, http...).'
+                    : 'Informe o protocolo usado pelo dispositivo (texto livre).'}
+                </p>
               </div>
 
               {/* Host e Porta */}
@@ -367,26 +364,21 @@ export default function DeviceDetail() {
                     value={connForm.port}
                     onChange={e => setConnForm(p => ({ ...p, port: e.target.value }))}
                     className="input font-mono"
-                    placeholder={String(PROTOCOL_PORTS[connForm.protocol] || 1883)}
+                    placeholder={connForm.isMqtt ? '1883' : '80'}
                     type="number"
                   />
                 </div>
               </div>
 
-              {/* Path (para HTTP/MQTT) */}
-              {['http', 'https', 'mqtt', 'mqtts'].includes(connForm.protocol) && (
+              {/* Tópico: obrigatório quando é MQTT */}
+              {connForm.isMqtt && (
                 <div>
-                  <label className="label">
-                    {connForm.protocol.startsWith('mqtt') ? 'Tópico MQTT' : 'Path / Endpoint'}
-                  </label>
+                  <label className="label">Tópico MQTT *</label>
                   <input
-                    value={connForm.protocol.startsWith('mqtt') ? connForm.topic : connForm.path}
-                    onChange={e => setConnForm(p => connForm.protocol.startsWith('mqtt')
-                      ? { ...p, topic: e.target.value }
-                      : { ...p, path: e.target.value }
-                    )}
+                    value={connForm.topic}
+                    onChange={e => setConnForm(p => ({ ...p, topic: e.target.value }))}
                     className="input font-mono"
-                    placeholder={connForm.protocol.startsWith('mqtt') ? 'devices/sensor01/data' : '/api/data'}
+                    placeholder="devices/sensor01/data"
                   />
                 </div>
               )}
@@ -430,7 +422,8 @@ export default function DeviceDetail() {
                 <button
                   type="button"
                   onClick={() => saveConn.mutate()}
-                  disabled={!connForm.host || !connForm.port || saveConn.isPending}
+                  disabled={!connForm.host || !connForm.port || saveConn.isPending ||
+                    !connForm.protocol.trim() || (connForm.isMqtt && !connForm.topic.trim())}
                   className="btn-primary flex items-center gap-2 flex-1"
                 >
                   {saveConn.isPending ? <Loader2 size={16} className="animate-spin" /> : <Network size={16} />}

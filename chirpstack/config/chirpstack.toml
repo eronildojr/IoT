@@ -1,0 +1,68 @@
+# ChirpStack configuration
+
+[logging]
+  level="debug"
+
+[postgresql]
+  dsn="postgres://chirpstack:chirpstack2024@iot_postgres/chirpstack?sslmode=disable"
+  max_open_connections=10
+  ca_cert=""
+
+[redis]
+  servers=["redis://chirpstack_redis/"]
+  tls_enabled=false
+  cluster=false
+
+[network]
+  net_id="000000"
+  enabled_regions=["eu868", "us915_0", "au915_0"]
+  
+[api]
+  bind="0.0.0.0:8080"
+  secret="you-must-replace-this-with-a-random-secret"
+
+[gateway]
+  ca_cert=""
+  ca_key=""
+  client_cert_lifetime="11years 1months 1days 1hours 1minutes 1seconds"
+
+[integration]
+  enabled=["mqtt"]
+
+  [integration.mqtt]
+    server="tcp://iot_mosquitto:1883"
+    username="chirpstack"
+    password="chirpstack2024"
+    qos=0
+    clean_session=false
+    client_id=""
+    ca_cert=""
+    tls_cert=""
+    tls_key=""
+
+[codec]
+  js_timeout="100ms"
+
+[user_authentication]
+  [user_authentication.openid_connect]
+    enabled=false
+
+[join_server]
+  resolve_join_eui=false
+  resolve_domain_suffix=".joineuis.lora-alliance.org"
+
+[backend_interfaces]
+  bind="0.0.0.0:8070"
+
+[roaming]
+  resolve_net_id=false
+  default.enabled=false
+
+[monitoring]
+  bind=""
+  meta_log_max_history=10
+  gateway_frame_log_max_history=10
+  device_frame_log_max_history=10
+  device_event_log_max_history=10
+  per_gateway_frame_log_max_history=0
+  per_device_frame_log_max_history=0

@@ -1,13 +1,25 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { alertsApi } from '../services/api'
 import { useState } from 'react'
+import SosWatcher from './SosWatcher'
 import {
   LayoutDashboard, Cpu, BookOpen, MapPin, Bell, Zap,
   BarChart3, Users, Settings, LogOut, Radio, Shield, Menu, Route,
   Camera, Wifi, Plug, Map, Activity
-} from 'lucide-react'
+, Receipt, Building2, FileText, ClipboardList, Key, MessageCircle, ChevronDown } from 'lucide-react'
+
+const whatsappGroup = {
+  label: 'WhatsApp',
+  icon: MessageCircle,
+  items: [
+    { to: '/whatsapp/config', label: 'Configuração' },
+    { to: '/whatsapp/categorias', label: 'Categorias' },
+    { to: '/whatsapp/despacho', label: 'Despacho Manual' },
+    { to: '/whatsapp/ocorrencias', label: 'Ocorrências' },
+  ],
+}
 
 const nav = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
@@ -17,13 +29,16 @@ const nav = [
   { to: '/trackers', icon: MapPin, label: 'Rastreadores GPS' },
   { to: '/cameras', icon: Camera, label: 'Cameras' },
   { to: '/walkiefleet', icon: Wifi, label: 'WalkieFleet' },
-  { to: '/tuya', icon: Plug, label: 'Tuya IoT' },
   { to: '/alerts', icon: Bell, label: 'Alertas' },
   { to: '/automations', icon: Zap, label: 'Automações' },
   { to: '/routing', icon: Route, label: 'Roteirização' },
   { to: '/analytics', icon: BarChart3, label: 'Análise & IA' },
   { to: '/users', icon: Users, label: 'Usuários' },
   { to: '/settings', icon: Settings, label: 'Configurações' },
+  { to: '/billing', icon: Receipt, label: 'Faturamento' },
+  { to: '/customers', icon: Building2, label: 'Clientes' },
+  { to: '/contracts', icon: FileText, label: 'Contratos' },
+  { to: '/audit-logs', icon: ClipboardList, label: 'Auditoria' },
 ]
 
 const adminNav = [
@@ -35,7 +50,9 @@ const roles: Record<string, string> = { superadmin: 'Super Admin', admin: 'Admin
 export default function Layout() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [open, setOpen] = useState(false)
+  const [waOpen, setWaOpen] = useState(location.pathname.startsWith('/whatsapp'))
 
   const { data: unread } = useQuery({
     queryKey: ['unread'],
@@ -45,6 +62,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen bg-gray-950 overflow-hidden">
+      <SosWatcher />
       {open && <div className="fixed inset-0 bg-black/60 z-20 lg:hidden" onClick={() => setOpen(false)} />}
 
       <aside className={`fixed lg:static inset-y-0 left-0 z-30 w-64 bg-gray-900 border-r border-gray-800 flex flex-col transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
@@ -73,6 +91,26 @@ export default function Layout() {
               )}
             </NavLink>
           ))}
+          {/* Grupo WhatsApp (colapsável) */}
+          <div>
+            <button onClick={() => setWaOpen(o => !o)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${location.pathname.startsWith('/whatsapp') ? 'text-cyan-400' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}>
+              <whatsappGroup.icon size={18} className="flex-shrink-0" />
+              <span>{whatsappGroup.label}</span>
+              <ChevronDown size={16} className={`ml-auto transition-transform ${waOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {waOpen && (
+              <div className="ml-4 mt-0.5 space-y-0.5 border-l border-gray-800 pl-2">
+                {whatsappGroup.items.map(({ to, label }) => (
+                  <NavLink key={to} to={to} onClick={() => setOpen(false)}
+                    className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${isActive ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}>
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
+
           {(user?.role === 'admin' || user?.role === 'superadmin') && adminNav.map(({ to, icon: Icon, label }) => (
             <NavLink key={to} to={to} onClick={() => setOpen(false)}
               className={({ isActive }) => `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all relative ${isActive ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'}`}>
@@ -88,6 +126,7 @@ export default function Layout() {
             </NavLink>
           )}
         </nav>
+      <div className="text-xs text-gray-500 text-center py-2">v1.0-15</div>
 
         {/* User */}
         <div className="px-3 py-3 border-t border-gray-800">
