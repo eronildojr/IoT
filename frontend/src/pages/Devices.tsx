@@ -37,7 +37,7 @@ export default function Devices() {
       setSyncing(false)
     }
   }
-  const [form, setForm] = useState({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' })
+  const [form, setForm] = useState({ name: '', identifier: '', protocol: 'wifi', communication: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' })
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['devices', search, status, protocol],
@@ -59,7 +59,7 @@ export default function Devices() {
     mutationFn: (d: any) => d.protocol === 'lorawan' 
         ? api.post('/lorawan/devices', d).then(r => r.data)
         : devicesApi.create(d),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setShowCreate(false); setForm({ name: '', identifier: '', protocol: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' }) },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['devices'] }); setShowCreate(false); setForm({ name: '', identifier: '', protocol: 'wifi', communication: 'mqtt', type: 'iot', location: '', notes: '', modelId: '', devEUI: '', lorawanRegion: 'EU868', joinType: 'OTAA', appKey: '' }) },
   })
 
   const devices: any[] = data?.devices || []
@@ -224,17 +224,28 @@ export default function Devices() {
                   <input value={form.identifier} onChange={e => setForm(f => ({...f, identifier: e.target.value.replace(/\s/g, '_').toLowerCase()}))} placeholder="Ex: sensor_temp_sala01" className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-cyan-500" />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-400 mb-1">Protocolo *</label>
+                  <label className="block text-xs text-gray-400 mb-1">Protocolo de Conexão *</label>
                   <select value={form.protocol} onChange={e => setForm(f => ({...f, protocol: e.target.value}))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
-                    <option value="mqtt">MQTT</option>
-                    <option value="lorawan">LoRaWAN</option>
                     <option value="wifi">WiFi</option>
+                    <option value="lorawan">LoRaWAN</option>
                     <option value="lte">LTE/4G</option>
                     <option value="bluetooth">Bluetooth</option>
+                    <option value="ethernet">Ethernet</option>
                     <option value="custom">Personalizado</option>
                   </select>
+                  <p className="text-[11px] text-gray-500 mt-1">Como o dispositivo se conecta à rede.</p>
                 </div>
                 <div>
+                  <label className="block text-xs text-gray-400 mb-1">Tipo de Comunicação *</label>
+                  <select value={form.communication} onChange={e => setForm(f => ({...f, communication: e.target.value}))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
+                    <option value="mqtt">MQTT</option>
+                    <option value="http">HTTP</option>
+                    <option value="coap">CoAP</option>
+                    <option value="custom">Personalizado</option>
+                  </select>
+                  <p className="text-[11px] text-gray-500 mt-1">Como ele envia dados à plataforma.</p>
+                </div>
+                <div className="col-span-2">
                   <label className="block text-xs text-gray-400 mb-1">Tipo</label>
                   <select value={form.type} onChange={e => setForm(f => ({...f, type: e.target.value}))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="iot">IoT Genérico</option>
@@ -293,7 +304,7 @@ export default function Devices() {
                   </div>
                 )}
               </div>
-              {form.protocol === 'mqtt' && form.identifier && (
+              {form.communication === 'mqtt' && form.identifier && (
                 <div className="bg-cyan-950/40 border border-cyan-800/40 rounded-xl p-4">
                   <p className="text-xs font-semibold text-cyan-400 mb-2 flex items-center gap-1"><Radio className="w-3 h-3" /> Tópicos MQTT que serão gerados</p>
                   <div className="space-y-1 font-mono text-xs text-gray-300">
@@ -304,11 +315,18 @@ export default function Devices() {
                 </div>
               )}
             </div>
+            {create.isError && (
+              <div className="px-6 -mt-2 pb-2">
+                <p className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                  {(create.error as any)?.response?.data?.error || 'Erro ao criar dispositivo'}
+                </p>
+              </div>
+            )}
             <div className="p-6 border-t border-gray-700 flex gap-3 justify-end">
               <button onClick={() => setShowCreate(false)} className="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors">Cancelar</button>
               <button onClick={() => {
                   if (form.protocol === 'lorawan') {
-                    create.mutate({ name: form.name, devEUI: form.devEUI, region: form.lorawanRegion, joinType: form.joinType, notes: form.notes, modelId: form.modelId || undefined } as any)
+                    create.mutate({ protocol: 'lorawan', name: form.name, devEUI: form.devEUI, region: form.lorawanRegion, joinType: form.joinType, communication: form.communication, notes: form.notes, modelId: form.modelId || undefined } as any)
                   } else {
                     create.mutate({ ...form, modelId: form.modelId || undefined })
                   }

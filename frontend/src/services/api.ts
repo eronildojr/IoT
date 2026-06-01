@@ -339,3 +339,19 @@ export interface MapOverview {
 export const mapApi = {
   overview: () => api.get<MapOverview>('/map/overview').then(r => r.data),
 }
+
+export interface SosAlert {
+  id: number
+  dev_eui: string | null
+  battery_level: number | null
+  latitude: number | null
+  longitude: number | null
+  triggered_at: string
+  device_id: string | null
+  device_name: string | null
+}
+
+export const sosApi = {
+  recent: (limit = 30) => api.get<SosAlert[]>('/sos-alerts', { params: { limit } }).then(r => r.data),
+  forDevice: (deviceId: string, limit = 50) => api.get<SosAlert[]>(`/devices/${deviceId}/sos-alerts`, { params: { limit } }).then(r => r.data),
+}
